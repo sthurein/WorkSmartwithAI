@@ -194,6 +194,8 @@ def ask_gemini(sender_id, message, extracted_data=None):
 
                 [RULES]
                 - Speak primarily in **Burmese** (use "လူကြီးမင်း").
+                - Name နဲ့ ဖုန်းနံပါတ်ကို Conversation တစ်ခုတည်းမှာ မတောင်းပါနဲ့။ 
+                - နာမည်ကို စာတစ်ကြောင်းရိုက်ပြီးပို့ဖို့တောင်းပါ။ ဖုန်းနံပါတ်ကို တစ်ကြောင်းရိုက်ဖို့ ပြောပါ။ 
                 - Do NOT discuss other courses not listed here.
                 - Payment: Admin will contact via phone.
                 - Course Platform: Zoom + Telegram.
