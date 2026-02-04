@@ -22,14 +22,13 @@ SERVICE_ACCOUNT_ENCODED = os.environ.get('SERVICE_ACCOUNT_JSON')
 # [MODEL SETTING] Using 'gemini-flash-latest' as requested
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
-    # မိတ်ဆွေ လိုချင်တဲ့ Model Name အတိုင်း အတိအကျ ထည့်ပေးထားပါတယ်
     model = genai.GenerativeModel('gemini-flash-latest')
     user_sessions = {} 
 else:
     print("⚠️ CRITICAL: GOOGLE_API_KEY is missing!")
 
 # ==========================================
-# ၂။ GOOGLE SHEETS HANDLER (PROFESSIONAL ERROR HANDLING)
+# ၂။ GOOGLE SHEETS HANDLER
 # ==========================================
 def get_google_creds():
     try:
@@ -55,9 +54,6 @@ def get_google_creds():
         return None
 
 def save_to_google_sheet(sender_id, extracted_data):
-    """
-    Saves lead data to Google Sheet.
-    """
     try:
         creds = get_google_creds()
         if not creds: return False
@@ -98,7 +94,7 @@ def save_to_google_sheet(sender_id, extracted_data):
         return False
 
 # ==========================================
-# ၃။ INTELLIGENT EXTRACTION (CORRECT SERVICE NAMES)
+# ၃။ INTELLIGENT EXTRACTION (SPECIFIC SERVICES)
 # ==========================================
 def check_and_extract_lead(sender_id, current_message):
     try:
@@ -110,7 +106,7 @@ def check_and_extract_lead(sender_id, current_message):
         
         history_text += f"User (Latest): {current_message}\n"
 
-        # [CRITICAL UPDATE] Service Names & Burmese Context
+        # [SERVICE NAMES IN BURMESE]
         prompt = f"""
         Analyze the conversation. Extract Name, Phone, and Interested Service.
         
@@ -141,11 +137,9 @@ def check_and_extract_lead(sender_id, current_message):
         
         if json_match:
             lead_data = json.loads(json_match.group(0))
-            
             if lead_data.get('name') != "N/A" or lead_data.get('phone') != "N/A":
                 save_to_google_sheet(sender_id, lead_data)
                 return lead_data
-        
         return None
             
     except Exception as e:
@@ -157,7 +151,7 @@ def check_and_extract_lead(sender_id, current_message):
 # ==========================================
 def ask_gemini(sender_id, message, extracted_data=None):
     
-    # 1. System Injection to STOP LOOP
+    # 1. System Injection
     system_override = ""
     if extracted_data:
         name = extracted_data.get('name', 'N/A')
@@ -165,37 +159,30 @@ def ask_gemini(sender_id, message, extracted_data=None):
         
         if name != "N/A" and phone != "N/A":
             system_override = f"""
-            [SYSTEM ALERT: DATA SUCCESSFULLY SAVED]
+            [SYSTEM ALERT: DATA SAVED]
             User Name: {name}
             User Phone: {phone}
-            
-            INSTRUCTION:
-            1. DO NOT ask for name or phone number again.
-            2. Reply in BURMESE.
-            3. Say: "ကျေးဇူးတင်ပါတယ် {name} ခင်ဗျာ။ ဖုန်းနံပါတ် {phone} ကို လက်ခံရရှိပါတယ်"
-            4. Confirm that we will contact them soon.
+            INSTRUCTION: DO NOT ask for name/phone again. Reply in BURMESE. 
+            Say: "ကျေးဇူးတင်ပါတယ် {name} ခင်ဗျာ။ ဖုန်းနံပါတ် {phone} ကို လက်ခံရရှိပါတယ်"
             """
 
-    # 2. Initialize Chat Session
+    # 2. Init Chat
     if sender_id not in user_sessions:
         system_instruction = [
             {
                 "role": "user",
                 "parts": """
                 You are the Professional Admin of 'Work Smart with AI'.
-                
-                [YOUR SERVICES]
+                [SERVICES]
                 1. **AI Sales Content Creation** (AI နဲ့ အရောင်း Post တင်ဖို့ Content ဖန်တီးနည်း).
                 2. **Auto Bot Service** (Auto Bot ဝန်ဆောင်မှု).
-
                 [PROTOCOL]
                 - Speak primarily in **Burmese**.
                 - If user speaks English, adapt to English.
-                - **GOAL**: Answer questions about services and collect Name & Phone.
-                - **IMPORTANT**: Once you get the Name & Phone, STOP asking for it.
+                - STOP asking for Name/Phone once collected.
                 """
             },
-            { "role": "model", "parts": "Understood. I will act as the professional admin, use gemini-flash-latest, and stop asking once data is collected." }
+            { "role": "model", "parts": "Understood." }
         ]
         user_sessions[sender_id] = model.start_chat(history=system_instruction)
 
@@ -218,7 +205,7 @@ def ask_gemini(sender_id, message, extracted_data=None):
 # ==========================================
 @app.route('/', methods=['GET'])
 def home():
-    return "Bot is Live (Using gemini-flash-latest)!", 200
+    return "Bot is Live (Fixed Syntax)!", 200
 
 # MANYCHAT HOOK
 @app.route('/manychat', methods=['POST'])
@@ -236,7 +223,7 @@ def manychat_hook():
         print(f"ManyChat Error: {e}")
         return jsonify({"response": "Error"}), 500
 
-# FACEBOOK HOOK
+# FACEBOOK HOOK (SYNTAX ERROR FIX IS HERE)
 @app.route('/webhook', methods=['GET', 'POST'])
 def fb_webhook_main():
     if request.method == 'GET':
@@ -260,9 +247,10 @@ def fb_webhook_main():
                             send_facebook_message(sender_id, reply) 
                         
             return "EVENT_RECEIVED", 200
-    except Exception as e:
-        print(f"Webhook Error: {e}")
-        return "ERROR", 500
+        except Exception as e:
+            print(f"Webhook Error: {e}")
+            return "ERROR", 500
+            
     return "Not Found", 404
 
 def send_facebook_message(recipient_id, text):
