@@ -30,7 +30,7 @@ else:
     print("⚠️ CRITICAL: GOOGLE_API_KEY is missing!")
 
 # ==========================================
-# ၂။ GOOGLE SHEETS HANDLER (MEMORY READ/WRITE)
+# ၂။ GOOGLE SHEETS HANDLER
 # ==========================================
 def get_google_creds():
     try:
@@ -97,18 +97,17 @@ def save_to_google_sheet(sender_id, data):
 # ==========================================
 def check_and_extract_lead(sender_id, current_message):
     try:
-        # Prompt: Extract Entities from Mixed Text
         prompt = f"""
         ACT AS A DATA EXTRACTOR. 
         INPUT: "{current_message}"
         
-        TASK: Extract Name, Phone, and Service from the input text.
+        TASK: Extract Name, Phone, and Service.
         
         [RULES]
-        1. **NAME:** Look for patterns like "My name is...", "Name:...", or just a name mixed in text. (e.g., "မင်္ဂလာပါ မောင်မောင်ပါ") -> Extract "မောင်မောင်".
-        2. **PHONE:** Extract ANY number sequence (e.g., 09.., 09-.., 11111). Ignore spaces/dashes.
+        1. **NAME:** Extract patterns like "Name is...", "I am...", "...ပါ" or mixed text.
+        2. **PHONE:** Extract ANY number sequence.
         3. **SERVICE:** Match keywords (AI, Bot, Design, Chatbot).
-        4. **IGNORE:** Conversational fillers (Hello, Thank you, Khinbyar).
+        4. **IGNORE:** Conversational fillers.
         5. OUTPUT JSON ONLY: {{"name": "...", "phone": "...", "service": "..."}}
         """
         
@@ -123,10 +122,9 @@ def check_and_extract_lead(sender_id, current_message):
         if json_match:
             extracted_data = json.loads(json_match.group(0))
 
-        # [MEMORY MERGE LOGIC]
         existing_data = fetch_current_lead_data(sender_id)
         
-        # New data overwrites old data (This fixes the "Edit" issue automatically)
+        # New Data Overwrites Old Data (Critical for Editing)
         final_name = extracted_data.get('name') if extracted_data.get('name') != "N/A" else existing_data.get('name', 'N/A')
         final_phone = extracted_data.get('phone') if extracted_data.get('phone') != "N/A" else existing_data.get('phone', 'N/A')
         final_service = extracted_data.get('service') if extracted_data.get('service') != "N/A" else existing_data.get('service', 'N/A')
@@ -137,7 +135,6 @@ def check_and_extract_lead(sender_id, current_message):
             "service": final_service
         }
 
-        # Save ONLY if we found something NEW in this message
         if extracted_data.get('name') != "N/A" or extracted_data.get('phone') != "N/A":
             save_to_google_sheet(sender_id, merged_data)
             
@@ -148,19 +145,27 @@ def check_and_extract_lead(sender_id, current_message):
         return None
 
 # ==========================================
-# ၄။ CHAT LOGIC (EDIT ALLOWED)
+# ၄။ CHAT LOGIC (FULL KNOWLEDGE BASE)
 # ==========================================
 def ask_gemini(sender_id, message, extracted_data=None):
     
-    # [KEY FIX] Check if user wants to EDIT
-    # If user says "change", "wrong", "update", "ပြင်", "မှား" -> We ALLOW asking again.
-    edit_keywords = ["ပြင်", "change", "မှား", "wrong", "update", "reset", "မဟုတ်"]
+    # [LOGIC] Check if user wants to EDIT
+    edit_keywords = ["ပြင်", "change", "မှား", "wrong", "update", "reset", "မဟုတ်", "ပြောင်း", "edit"]
     is_editing = any(keyword in message.lower() for keyword in edit_keywords)
 
     system_override = ""
     
-    # Only block if data is full AND user is NOT trying to edit
-    if extracted_data and not is_editing:
+    # [LOGIC] User wants to EDIT -> Allow it
+    if is_editing:
+         system_override = f"""
+         [SYSTEM ALERT: USER WANTS TO CORRECT DATA]
+         ACTION:
+         1. Acknowledge the mistake politely.
+         2. Ask for the new information.
+         """
+    
+    # [LOGIC] Data Complete & NOT Editing -> Stop Asking & Answer Questions
+    elif extracted_data:
         name = extracted_data.get('name', 'N/A')
         phone = extracted_data.get('phone', 'N/A')
         
@@ -171,21 +176,12 @@ def ask_gemini(sender_id, message, extracted_data=None):
             User Phone: {phone}
             
             INSTRUCTION:
-            1. DO NOT ask for name/phone again unless user wants to change it.
+            1. DO NOT ask for name/phone again.
             2. Reply in BURMESE.
             3. Acknowledge receipt: "ကျေးဇူးတင်ပါတယ် {name} ခင်ဗျာ။ ဖုန်းနံပါတ် {phone} ကို လက်ခံရရှိပါတယ်"
-            4. Tell them Admin will contact soon.
+            4. **CRITICAL:** If the user asked a question (e.g., "When start?", "What time?"), ANSWER IT using the [KNOWLEDGE BASE].
+            5. If no question, say Admin will contact soon.
             """
-    
-    # If User IS editing, we inject a different override
-    if is_editing:
-         system_override = f"""
-         [SYSTEM ALERT: USER WANTS TO EDIT DATA]
-         User wants to change their info.
-         INSTRUCTION:
-         1. Acknowledge the request.
-         2. Ask for the new correct information politely in Burmese.
-         """
 
     if sender_id not in user_sessions:
         system_instruction = [
@@ -194,22 +190,35 @@ def ask_gemini(sender_id, message, extracted_data=None):
                 "parts": """
                 You are the Professional Admin of 'Work Smart with AI'. You are male (ကျွန်တော်).
                 
-                [SERVICES]
-                1. "AI Sales Content Creation" (200,000 MMK / Disc: 150,000 MMK).
-                2. "Auto Bot Service" (Contact for details).
-                3. "Social Media Design Class" (150,000 MMK).
-                4. "Chat Bot Training" (300,000 MMK).
+                # [KNOWLEDGE BASE - ဗဟုသုတဘဏ်]
+                Please use this information to answer user questions:
                 
-                [RULES]
+                **1. AI Sales Content Creation Class:**
+                   - **Start Date:** May 2nd (2.5.2026).
+                   - **Fees:** Normal: 200,000 MMK | Early Bird: 150,000 MMK.
+                   - **Time:** Every Saturday & Sunday, 8:00 PM - 9:30 PM.
+                   - **Duration:** 4 Weeks.
+
+                **2. Other Services:**
+                   - **Social Media Design Class:** 150,000 MMK.
+                   - **Chat Bot Training:** 300,000 MMK.
+                   - **Auto Bot Service:** Custom pricing (Admin will discuss).
+                
+                **3. General Information:**
+                   - **Platform:** Zoom (Live Learning) + Telegram (Lifetime Record Access).
+                   - **Certificate:** Digital Certificate provided upon completion.
+                   - **Payment:** KPay / Wave Money (Admin will provide account via phone).
+                   - **Location:** Online Class.
+                   - **Office Hours:** 9:00 AM - 5:00 PM.
+                
+                # [RULES]
                 - Speak primarily in **Burmese** (use "လူကြီးမင်း").
                 - **Mixed Text:** If user sends "Name is X, Phone is Y", EXTRACT IT immediately.
                 - **Editing:** If user says "Wrong phone" or "Change name", ALLOW them to update it.
-                - **Stop Loop:** Only stop asking if data is collected AND user is happy.
-                - Payment: Admin will contact via phone.
-                - Course Platform: Zoom + Telegram.
+                - **Unknown Info:** If answer is not in Knowledge Base, say "Admin ကို မေးမြန်းပြီး ပြန်ဖြေပေးပါမယ်" (Do not lie).
                 """
             },
-            { "role": "model", "parts": "Understood." }
+            { "role": "model", "parts": "Understood. I will use the Knowledge Base to answer accurate details." }
         ]
         user_sessions[sender_id] = model.start_chat(history=system_instruction)
 
@@ -232,7 +241,7 @@ def ask_gemini(sender_id, message, extracted_data=None):
 # ==========================================
 @app.route('/', methods=['GET'])
 def home():
-    return "Bot is Live (Mixed Text + Edit Fix)!", 200
+    return "Bot is Live (Full Knowledge Base)!", 200
 
 @app.route('/manychat', methods=['POST'])
 def manychat_hook():
