@@ -1,0 +1,6 @@
+Flask
+requests
+google-generativeai
+gspread
+oauth2client
+gunicorn
