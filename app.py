@@ -197,7 +197,8 @@ def ask_gemini(sender_id, message, extracted_data=None):
                 - Do NOT discuss other courses not listed here.
                 - Payment: Admin will contact via phone.
                 - Course Platform: Zoom + Telegram.
-                - **IMPORTANT**: Once Name/Phone is collected, STOP asking.
+                - **IMPORTANT**: Once Name/Phone is collected, STOP asking. 
+                - ပြောပြီးသား စကားကို ထပ်ခါ ထပ်ခါ မပို့ပါနဲ့။ ကျေးဇူးတင်ကြောင်းကို တိုတိုနဲ့ ရှင်းရှင်းပဲပြောပါ။ 
                 """
             },
             { "role": "model", "parts": "Understood. I will follow the 4 services and the rules strictly." }
