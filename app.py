@@ -54,11 +54,10 @@ def save_to_google_sheet(sender_id, extracted_data):
         if not creds: return
 
         client = gspread.authorize(creds)
-        
         try:
             sheet = client.open("WorkSmart_Leads").sheet1
         except:
-            print("🔴 Error: Sheet 'WorkSmart_Leads' not found!")
+            print("🔴 Error: Sheet not found!")
             return
         
         name = extracted_data.get('name', 'N/A')
@@ -94,23 +93,22 @@ def check_and_extract_lead(sender_id, current_message):
         history_text += f"User (Latest): {current_message}\n"
 
         prompt = f"""
-        Analyze the conversation history. Extract User's NAME, PHONE, and INTERESTED SERVICE.
+        Analyze conversation. Extract Name, Phone, Service.
         
-        [CONTEXT - SERVICES]
-        1. "AI Content Course" (Writing, Content Creation)
-        2. "Auto Bot Service" (Chatbot, Automation)
+        [SERVICES]
+        1. "AI Content Course"
+        2. "Auto Bot Service"
         
-        [RULES FOR EXTRACTION]
-        1. **NAME:** If user sends a raw name (e.g., "Soe Thurein Tun"), capture it.
-        2. **PHONE:** Look for 09... or +959... numbers.
-        3. **SERVICE:** Match with the services above.
-        4. If info is missing, use "N/A".
-        5. Return JSON ONLY.
+        [RULES]
+        1. Name: Capture ANY name (Burmese/English).
+        2. Phone: Capture ANY phone number.
+        3. Service: Match context.
+        4. Return JSON ONLY.
         
         History:
         {history_text}
         
-        Output JSON format: {{"name": "...", "phone": "...", "service": "..."}}
+        Output: {{"name": "...", "phone": "...", "service": "..."}}
         """
         
         response = model.generate_content(prompt)
@@ -124,7 +122,7 @@ def check_and_extract_lead(sender_id, current_message):
         if json_match:
             lead_data = json.loads(json_match.group(0))
             save_to_google_sheet(sender_id, lead_data)
-            return lead_data
+            return lead_data 
         else:
             return None
             
@@ -133,46 +131,59 @@ def check_and_extract_lead(sender_id, current_message):
         return None
 
 # ==========================================
-# ၄။ CHAT LOGIC
+# ၄။ CHAT LOGIC (NATURAL LANGUAGE)
 # ==========================================
 def ask_gemini(sender_id, message, extracted_data=None):
-    system_note = ""
+    
+    # ၁။ Data ရပြီဆိုရင် Bot ကို အမိန့်ပေးမည့် စာ
+    system_override = ""
     if extracted_data:
         name = extracted_data.get('name', 'N/A')
         phone = extracted_data.get('phone', 'N/A')
         
         if name != "N/A" and phone != "N/A":
-            system_note = f"""
-            [SYSTEM ALERT] 
-            The user JUST provided their details!
-            Name: {name}
-            Phone: {phone}
-            DO NOT ASK FOR NAME/PHONE AGAIN.
-            SAY: "ကျေးဇူးတင်ပါတယ် {name} ခင်ဗျာ။ ဖုန်းနံပါတ် {phone} ကို လက်ခံရရှိပါတယ်" and confirm the service.
+            system_override = f"""
+            [SYSTEM COMMAND: DATA RECEIVED]
+            User Details: Name={name}, Phone={phone}
+            
+            ACTION:
+            1. STOP ASKING for name/phone.
+            2. Confirm receipt naturally in the user's language.
+            3. Say something like: "Thanks {name}, we received your phone {phone}."
             """
 
+    # ၂။ Session မရှိသေးရင် အစက ပြန်စမယ်
     if sender_id not in user_sessions:
         system_instruction = [
             {
                 "role": "user",
                 "parts": """
-                You are the Male Admin of 'Work Smart with AI'.
-                [GOAL] Collect Name & Phone for registration.
+                You are the Male Admin (ကျွန်တော်) of 'Work Smart with AI'.
+                
+                [LANGUAGE & TONE]
+                - Primary: Natural Burmese (Myanmar).
+                - Adaptive: If user speaks English, reply in English.
+                - Tech Terms: Use English for terms like "AI, Content, Course, Marketing" (Do not translate these awkwardly).
+                - Tone: Professional but friendly (သုံးပါ၊ ခင်ဗျာ).
+
+                [GOAL]
+                Answer questions & Collect Name/Phone.
+                
                 [RULES]
-                1. If you have the Name & Phone, STOP ASKING.
-                2. Short answers (max 3 sentences).
-                3. Be professional and helpful.
+                - Once Name & Phone are collected, STOP ASKING.
+                - Keep answers concise.
                 """
             },
-            { "role": "model", "parts": "Understood." }
+            { "role": "model", "parts": "Understood. I will speak natural Burmese/English based on context and stop asking once I have data." }
         ]
         user_sessions[sender_id] = model.start_chat(history=system_instruction)
 
     chat = user_sessions[sender_id]
     
+    # ၃။ Message ပို့ခြင်း
     full_message = message
-    if system_note:
-        full_message = f"{message}\n\n{system_note}"
+    if system_override:
+        full_message = f"{message}\n\n{system_override}"
 
     for attempt in range(3):
         try:
@@ -187,7 +198,7 @@ def ask_gemini(sender_id, message, extracted_data=None):
 # ==========================================
 @app.route('/', methods=['GET'])
 def home():
-    return "Bot Online (Syntax Error Fixed)!", 200
+    return "Bot Online (Natural Language Mode)!", 200
 
 # MANYCHAT HOOK
 @app.route('/manychat', methods=['POST'])
@@ -229,9 +240,9 @@ def fb_webhook_main():
                             send_facebook_message(sender_id, reply) 
                         
             return "EVENT_RECEIVED", 200
-        except Exception as e:
-            print(f"🔴 Webhook Error: {e}")
-            return "ERROR", 500
+    except Exception as e:
+        print(f"Webhook Error: {e}")
+        return "ERROR", 500
     return "Not Found", 404
 
 def send_facebook_message(recipient_id, text):
@@ -242,7 +253,7 @@ def send_facebook_message(recipient_id, text):
     try:
         requests.post(url, json=payload, headers=headers)
     except Exception as e:
-        print(f"🔴 FB Message Send Error: {e}")
+        print(f"FB Send Error: {e}")
 
 if __name__ == '__main__':
     app.run(debug=True, port=os.getenv("PORT", default=5000))
