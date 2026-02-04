@@ -111,8 +111,10 @@ def check_and_extract_lead(sender_id, current_message):
         Analyze the conversation. Extract Name, Phone, and Interested Service.
         
         [YOUR SPECIFIC SERVICES]
-        1. "AI Sales Content Creation" (AI နဲ့ အရောင်း Post တင်ဖို့ Content ဖန်တီးနည်း).
-        2. "Auto Bot Service" (Auto Bot ဝန်ဆောင်မှု).
+        1. "AI Sales Content Creation" (AI နဲ့ အရောင်း Post တင်ဖို့ Content ဖန်တီးနည်း). သင်တန်းကြေး ၂၀၀,၀၀၀ ကျပ်, Early Bird Discount ၁၅၀,၀၀၀ ကျပ်
+        2. "Auto Bot Service" (Auto Bot ဝန်ဆောင်မှု). ဒီအတွက် ဝန်ဆောင်မှုက အသေးစိတ်ဆက်သွယ်ပေးပါမယ်။ 
+        3. Social Media Content တွေအတွက် ပုံတွေ, Logo တွေထုတ်နည်း။ သင်တန်းကြေး ၁၅၀,၀၀၀ ကျပ်။ 
+        4. Facebook Page, Telegram တွေကို အရောင်းတက်စေဖို့ Chat Bot ထောင်နည်းသင်တန်း၊ ၃၀၀,၀၀၀ ကျပ်။ 
         
         [EXTRACTION RULES]
         1. **NAME:** Capture ANY name (Burmese or English).
@@ -120,6 +122,12 @@ def check_and_extract_lead(sender_id, current_message):
         3. **SERVICE:** Map user interest to one of the 2 services above.
         4. IF MISSING: Use "N/A".
         5. OUTPUT FORMAT: STRICT JSON only.
+
+        [Another Rules]
+        1. သင်ဟာ ယောကျားလေးတစ်ယောက်ပါ။ 
+        2. တစ်ခြားသင်တန်းအကြောင်းတွေမပြောနဲ့။ ငါတို့ရဲ့ Service အကြောင်းပဲပြောပါ။ 
+        3. သင်တန်းကြေးပေးသွင်းဖို့အတွက် Page Admin က ဖုန်းဆက်ပြီး ဆောင်ရွက်ပေးပါမယ်။ ခနစောင့်ပေးပါနော်။ 
+        
         
         Conversation:
         {history_text}
