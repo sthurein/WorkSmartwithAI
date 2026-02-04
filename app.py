@@ -84,13 +84,21 @@ def save_to_google_sheet(sender_id, data):
         
         if cell:
             row = cell.row
-            if name != 'N/A': sheet.update_cell(row, 2, name)
-            if phone != 'N/A': sheet.update_cell(row, 3, phone)
-            if service != 'N/A': sheet.update_cell(row, 4, service)
+            # [KEY FIX: PROTECTION LOGIC]
+            # အသစ်ရတဲ့ Data က 'N/A' မဟုတ်မှသာ Sheet ထဲက Data ကို ပြောင်းမယ်
+            if name != 'N/A': 
+                sheet.update_cell(row, 2, name)
+            if phone != 'N/A': 
+                sheet.update_cell(row, 3, phone)
+            if service != 'N/A': 
+                sheet.update_cell(row, 4, service)
+            print(f"✅ Updated only new fields for Row {row}")
         else:
             sheet.append_row([str(sender_id), name, phone, service])
         return True
-    except: return False
+    except Exception as e:
+        print(f"🔴 Sheet Error: {e}")
+        return False
 
 # ==========================================
 # ၃။ INTELLIGENT EXTRACTION (MIXED TEXT & EDIT LOGIC)
