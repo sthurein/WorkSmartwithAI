@@ -24,7 +24,7 @@ SERVICE_ACCOUNT_ENCODED = os.environ.get('SERVICE_ACCOUNT_JSON')
 # ==========================================
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-flash-latest')
     user_sessions = {} 
 else:
     print("⚠️ Error: GOOGLE_API_KEY is missing!")
@@ -35,7 +35,6 @@ else:
 def get_google_creds():
     try:
         if not SERVICE_ACCOUNT_ENCODED: return None
-        # Base64 Decoding
         try:
             creds_json = json.loads(SERVICE_ACCOUNT_ENCODED)
         except:
@@ -56,7 +55,6 @@ def save_to_google_sheet(sender_id, extracted_data):
 
         client = gspread.authorize(creds)
         
-        # Sheet ဖွင့်ခြင်း
         try:
             sheet = client.open("WorkSmart_Leads").sheet1
         except:
@@ -69,7 +67,6 @@ def save_to_google_sheet(sender_id, extracted_data):
 
         print(f"📝 Saving -> Name: {name}, Phone: {phone}, Service: {service}")
 
-        # ID ရှာမယ်
         try:
             cell = sheet.find(str(sender_id), in_column=1)
         except gspread.exceptions.CellNotFound:
@@ -87,11 +84,7 @@ def save_to_google_sheet(sender_id, extracted_data):
         print(f"🔴 Google Sheet Error: {e}")
 
 def check_and_extract_lead(sender_id, current_message):
-    """
-    Data Extract လုပ်ပြီး Result ကို Return ပြန်ပေးမည့် Function
-    """
     try:
-        # History ယူမယ်
         history_text = ""
         if sender_id in user_sessions:
             for msg in user_sessions[sender_id].history:
@@ -100,7 +93,6 @@ def check_and_extract_lead(sender_id, current_message):
         
         history_text += f"User (Latest): {current_message}\n"
 
-        # Prompt (မိတ်ဆွေရဲ့ Screenshot အတိုင်း နာမည်သီးသန့်လာလည်း ဖမ်းမိအောင် ပြင်ထားသည်)
         prompt = f"""
         Analyze the conversation history. Extract User's NAME, PHONE, and INTERESTED SERVICE.
         
@@ -131,9 +123,8 @@ def check_and_extract_lead(sender_id, current_message):
         
         if json_match:
             lead_data = json.loads(json_match.group(0))
-            # Sheet ထဲ သိမ်းမယ်
             save_to_google_sheet(sender_id, lead_data)
-            return lead_data # Chat Bot သိအောင် Data ပြန်ပို့ပေးမယ်
+            return lead_data
         else:
             return None
             
@@ -142,20 +133,14 @@ def check_and_extract_lead(sender_id, current_message):
         return None
 
 # ==========================================
-# ၄။ CHAT LOGIC (SMART REPLY WITH INJECTION)
+# ၄။ CHAT LOGIC
 # ==========================================
 def ask_gemini(sender_id, message, extracted_data=None):
-    """
-    extracted_data ပါလာရင် Bot ကို "တော်တော့၊ မမေးနဲ့တော့" လို့ ပြောမည့် Function
-    """
-    
-    # Data တွေ့ထားရင် System Prompt မှာ "အတင်း" ထည့်ပေးမယ်
     system_note = ""
     if extracted_data:
         name = extracted_data.get('name', 'N/A')
         phone = extracted_data.get('phone', 'N/A')
         
-        # နာမည်နဲ့ ဖုန်း ပါလာရင် Bot ကို ပါးစပ်ပိတ်ခိုင်းမယ်
         if name != "N/A" and phone != "N/A":
             system_note = f"""
             [SYSTEM ALERT] 
@@ -185,7 +170,6 @@ def ask_gemini(sender_id, message, extracted_data=None):
 
     chat = user_sessions[sender_id]
     
-    # System Note ရှိရင် Message မှာ ကပ်ပို့မယ် (Bot သိအောင်)
     full_message = message
     if system_note:
         full_message = f"{message}\n\n{system_note}"
@@ -203,7 +187,7 @@ def ask_gemini(sender_id, message, extracted_data=None):
 # ==========================================
 @app.route('/', methods=['GET'])
 def home():
-    return "Bot Online (Sync Mode Fix)!", 200
+    return "Bot Online (Syntax Error Fixed)!", 200
 
 # MANYCHAT HOOK
 @app.route('/manychat', methods=['POST'])
@@ -213,10 +197,7 @@ def manychat_hook():
         user_id = str(data.get('user_id'))
         message = data.get('message')
         
-        # ၁။ Data အရင်ထုတ်မယ် (Wait လုပ်မယ် - Thread မသုံးတော့ဘူး)
         extracted_data = check_and_extract_lead(user_id, message)
-        
-        # ၂။ Data ရလာဒ်ကို Bot ဆီ ထည့်ပေးပြီး စာပြန်ခိုင်းမယ်
         bot_reply = ask_gemini(user_id, message, extracted_data)
         
         return jsonify({"response": bot_reply}), 200
@@ -242,14 +223,16 @@ def fb_webhook_main():
                             sender_id = event["sender"]["id"]
                             user_text = event["message"]["text"]
                             
-                            # Facebook အတွက်လည်း Sync Mode ပဲ သုံးလိုက်ပါမယ် (တိကျမှုအတွက်)
                             extracted = check_and_extract_lead(sender_id, user_text)
                             reply = ask_gemini(sender_id, user_text, extracted)
                             
                             send_facebook_message(sender_id, reply) 
                         
             return "EVENT_RECEIVED", 200
-    except: return "ERROR", 500
+        except Exception as e:
+            print(f"🔴 Webhook Error: {e}")
+            return "ERROR", 500
+    return "Not Found", 404
 
 def send_facebook_message(recipient_id, text):
     if not PAGE_ACCESS_TOKEN: return
