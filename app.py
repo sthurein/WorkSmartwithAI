@@ -24,7 +24,7 @@ SERVICE_ACCOUNT_ENCODED = os.environ.get('SERVICE_ACCOUNT_JSON')
 # ==========================================
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
-    model = genai.GenerativeModel('gemini-flash-latest')
+    model = genai.GenerativeModel('gemini-1.5-flash')
     user_sessions = {} 
 else:
     print("⚠️ Error: GOOGLE_API_KEY is missing!")
@@ -198,7 +198,7 @@ def ask_gemini(sender_id, message, extracted_data=None):
 # ==========================================
 @app.route('/', methods=['GET'])
 def home():
-    return "Bot Online (Natural Language Mode)!", 200
+    return "Bot Online (Indentation Fixed)!", 200
 
 # MANYCHAT HOOK
 @app.route('/manychat', methods=['POST'])
@@ -240,9 +240,10 @@ def fb_webhook_main():
                             send_facebook_message(sender_id, reply) 
                         
             return "EVENT_RECEIVED", 200
-    except Exception as e:
-        print(f"Webhook Error: {e}")
-        return "ERROR", 500
+        except Exception as e:
+            print(f"Webhook Error: {e}")
+            return "ERROR", 500
+            
     return "Not Found", 404
 
 def send_facebook_message(recipient_id, text):
