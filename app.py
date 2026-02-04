@@ -19,10 +19,13 @@ PAGE_ACCESS_TOKEN = os.environ.get("PAGE_ACCESS_TOKEN")
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN")
 SERVICE_ACCOUNT_ENCODED = os.environ.get('SERVICE_ACCOUNT_JSON')
 
-# [MODEL SETTING] Using 'gemini-flash-latest' as requested
+# [MODEL SETTING] Using 'gemini-flash-latest'
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
-    model = genai.GenerativeModel('gemini-flash-latest')
+    try:
+        model = genai.GenerativeModel('gemini-flash-latest')
+    except:
+        model = genai.GenerativeModel('gemini-1.5-flash')
     user_sessions = {} 
 else:
     print("⚠️ CRITICAL: GOOGLE_API_KEY is missing!")
@@ -94,7 +97,7 @@ def save_to_google_sheet(sender_id, extracted_data):
         return False
 
 # ==========================================
-# ၃။ INTELLIGENT EXTRACTION (SPECIFIC SERVICES)
+# ၃။ INTELLIGENT EXTRACTION (4 SERVICES UPDATED)
 # ==========================================
 def check_and_extract_lead(sender_id, current_message):
     try:
@@ -106,30 +109,22 @@ def check_and_extract_lead(sender_id, current_message):
         
         history_text += f"User (Latest): {current_message}\n"
 
-        # [SERVICE NAMES IN BURMESE]
+        # [CRITICAL UPDATE] Service Lists
         prompt = f"""
         Analyze the conversation. Extract Name, Phone, and Interested Service.
         
-        [YOUR SPECIFIC SERVICES]
-        1. "AI Sales Content Creation" (AI နဲ့ အရောင်း Post တင်ဖို့ Content ဖန်တီးနည်း). သင်တန်းကြေး ၂၀၀,၀၀၀ ကျပ်, Early Bird Discount ၁၅၀,၀၀၀ ကျပ်
-        2. "Auto Bot Service" Facebook Page, Telegram တို့အတွက် (Auto Bot ဝန်ဆောင်မှု). ဒီအတွက် ဝန်ဆောင်မှုက အသေးစိတ်ဆက်သွယ်ပေးပါမယ်။ 
-        3. Social Media Content တွေအတွက် ပုံတွေ, Logo တွေထုတ်နည်း။ သင်တန်းကြေး ၁၅၀,၀၀၀ ကျပ်။ 
-        4. Facebook Page, Telegram တွေကို အရောင်းတက်စေဖို့ Chat Bot ထောင်နည်းသင်တန်း၊ ၃၀၀,၀၀၀ ကျပ်။ 
+        [YOUR 4 SPECIFIC SERVICES]
+        1. "AI Sales Content Creation" (AI နဲ့ အရောင်း Post တင်ဖို့ Content ဖန်တီးနည်း). သင်တန်းကြေး ၂၀၀,၀၀၀ ကျပ် (Early Bird: ၁၅၀,၀၀၀ ကျပ်).
+        2. "Auto Bot Service" (Facebook Page, Telegram အတွက် Auto Bot ဝန်ဆောင်မှု).
+        3. "Social Media Design Class" (Social Media ပုံတွေ, Logo တွေထုတ်နည်း). သင်တန်းကြေး ၁၅၀,၀၀၀ ကျပ်.
+        4. "Chat Bot Training" (Facebook Page, Telegram အရောင်း Chat Bot ထောင်နည်းသင်တန်း). သင်တန်းကြေး ၃၀၀,၀၀၀ ကျပ်.
         
         [EXTRACTION RULES]
-        1. **NAME:** Capture ANY name (Burmese or English).
+        1. **NAME:** Capture ANY name provided (e.g., "Mg Mg", "My name is...").
         2. **PHONE:** Capture 09... or +959... numbers.
-        3. **SERVICE:** Map user interest to one of the 2 services above.
+        3. **SERVICE:** Map user interest to one of the 4 services above.
         4. IF MISSING: Use "N/A".
         5. OUTPUT FORMAT: STRICT JSON only.
-
-        [Another Rules]
-        1. သင်ဟာ ယောကျားလေးတစ်ယောက်ပါ။ 
-        2. တစ်ခြားသင်တန်းအကြောင်းတွေမပြောနဲ့။ ငါတို့ရဲ့ Service အကြောင်းပဲပြောပါ။ 
-        3. သင်တန်းကြေးပေးသွင်းဖို့အတွက် Page Admin က ဖုန်းဆက်ပြီး ဆောင်ရွက်ပေးပါမယ်။ ခနစောင့်ပေးပါနော်။ 
-        4. သင်တန်းက Zoom နဲ့ သင်ပါမယ်။ Telegram မှာ Discussion Channel နဲ့ Record Channel တွေတင်ပေးပါမယ်။
-        5. လူတွေကို နာမ်စား "ခင်ဗျား" မသုံးပါနဲ့။ "လူကြီးမင်း" ဟု သုံးပါ။ ​
-        
         
         Conversation:
         {history_text}
@@ -147,9 +142,12 @@ def check_and_extract_lead(sender_id, current_message):
         
         if json_match:
             lead_data = json.loads(json_match.group(0))
+            
+            # Save if at least one field is present
             if lead_data.get('name') != "N/A" or lead_data.get('phone') != "N/A":
                 save_to_google_sheet(sender_id, lead_data)
                 return lead_data
+        
         return None
             
     except Exception as e:
@@ -157,23 +155,27 @@ def check_and_extract_lead(sender_id, current_message):
         return None
 
 # ==========================================
-# ၄။ CHAT LOGIC (LOOP KILLER)
+# ၄။ CHAT LOGIC (ANTI-FREEZE SYSTEM)
 # ==========================================
 def ask_gemini(sender_id, message, extracted_data=None):
     
-    # 1. System Injection
+    # 1. System Injection (Stronger Override)
     system_override = ""
     if extracted_data:
         name = extracted_data.get('name', 'N/A')
         phone = extracted_data.get('phone', 'N/A')
         
+        # Data ဝင်သွားတာနဲ့ ကျန်တဲ့ Context ကို ဖြတ်ချလိုက်မယ် (Anti-Freeze)
         if name != "N/A" and phone != "N/A":
             system_override = f"""
-            [SYSTEM ALERT: DATA SAVED]
-            User Name: {name}
-            User Phone: {phone}
-            INSTRUCTION: DO NOT ask for name/phone again. Reply in BURMESE. 
-            Say: "ကျေးဇူးတင်ပါတယ် {name} ခင်ဗျာ။ ဖုန်းနံပါတ် {phone} ကို လက်ခံရရှိပါတယ်"
+            [SYSTEM COMMAND: STOP EVERYTHING & CONFIRM]
+            User just submitted Name: {name} and Phone: {phone}.
+            
+            ACTION REQUIRED:
+            1. IGNORE any other questions in the latest message.
+            2. ONLY say: "ကျေးဇူးတင်ပါတယ် {name} ခင်ဗျာ။ ဖုန်းနံပါတ် {phone} ကို လက်ခံရရှိပါတယ်"
+            3. Tell them Admin will contact them soon for payment.
+            4. DO NOT ask for data again.
             """
 
     # 2. Init Chat
@@ -182,28 +184,23 @@ def ask_gemini(sender_id, message, extracted_data=None):
             {
                 "role": "user",
                 "parts": """
-                You are the Professional Admin of 'Work Smart with AI'. You are a male. 
+                You are the Professional Admin of 'Work Smart with AI'. You are male (ကျွန်တော်).
                 
                 [SERVICES]
-                 1. "AI Sales Content Creation" (AI နဲ့ အရောင်း Post တင်ဖို့ Content ဖန်တီးနည်း). သင်တန်းကြေး ၂၀၀,၀၀၀ ကျပ်, Early Bird Discount ၁၅၀,၀၀၀ ကျပ်
-                 2. "Auto Bot Service" Facebook Page, Telegram တို့အတွက် (Auto Bot ဝန်ဆောင်မှု). ဒီအတွက် ဝန်ဆောင်မှုက အသေးစိတ်ဆက်သွယ်ပေးပါမယ်။ 
-                 3. Social Media Content တွေအတွက် ပုံတွေ, Logo တွေထုတ်နည်း။ သင်တန်းကြေး ၁၅၀,၀၀၀ ကျပ်။ 
-                 4. Facebook Page, Telegram တွေကို အရောင်းတက်စေဖို့ Chat Bot ထောင်နည်းသင်တန်း၊ ၃၀၀,၀၀၀ ကျပ်။ 
+                1. "AI Sales Content Creation" (200,000 MMK / Disc: 150,000 MMK).
+                2. "Auto Bot Service" (Contact for details).
+                3. "Social Media Design Class" (150,000 MMK).
+                4. "Chat Bot Training" (300,000 MMK).
 
-                 [Another Rules]
-                1. သင်ဟာ ယောကျားလေးတစ်ယောက်ပါ။ 
-                2. တစ်ခြားသင်တန်းအကြောင်းတွေမပြောနဲ့။ ငါတို့ရဲ့ Service အကြောင်းပဲပြောပါ။ 
-                3. သင်တန်းကြေးပေးသွင်းဖို့အတွက် Page Admin က ဖုန်းဆက်ပြီး ဆောင်ရွက်ပေးပါမယ်။ ခနစောင့်ပေးပါနော်။ 
-                4. သင်တန်းက Zoom နဲ့ သင်ပါမယ်။ Telegram မှာ Discussion Channel နဲ့ Record Channel တွေတင်ပေးပါမယ်။
-                5. လူတွေကို နာမ်စား "ခင်ဗျား" မသုံးပါနဲ့။ "လူကြီးမင်း" ဟု သုံးပါ။ 
-                
-                [PROTOCOL]
-                - Speak primarily in **Burmese**.
-                - If user speaks English, adapt to English.
-                - STOP asking for Name/Phone once collected.
+                [RULES]
+                - Speak primarily in **Burmese** (use "လူကြီးမင်း").
+                - Do NOT discuss other courses not listed here.
+                - Payment: Admin will contact via phone.
+                - Course Platform: Zoom + Telegram.
+                - **IMPORTANT**: Once Name/Phone is collected, STOP asking.
                 """
             },
-            { "role": "model", "parts": "Understood." }
+            { "role": "model", "parts": "Understood. I will follow the 4 services and the rules strictly." }
         ]
         user_sessions[sender_id] = model.start_chat(history=system_instruction)
 
@@ -226,7 +223,7 @@ def ask_gemini(sender_id, message, extracted_data=None):
 # ==========================================
 @app.route('/', methods=['GET'])
 def home():
-    return "Bot is Live (Fixed Syntax)!", 200
+    return "Bot is Live (4 Services Updated)!", 200
 
 # MANYCHAT HOOK
 @app.route('/manychat', methods=['POST'])
@@ -244,7 +241,7 @@ def manychat_hook():
         print(f"ManyChat Error: {e}")
         return jsonify({"response": "Error"}), 500
 
-# FACEBOOK HOOK (SYNTAX ERROR FIX IS HERE)
+# FACEBOOK HOOK
 @app.route('/webhook', methods=['GET', 'POST'])
 def fb_webhook_main():
     if request.method == 'GET':
@@ -271,7 +268,6 @@ def fb_webhook_main():
         except Exception as e:
             print(f"Webhook Error: {e}")
             return "ERROR", 500
-            
     return "Not Found", 404
 
 def send_facebook_message(recipient_id, text):
