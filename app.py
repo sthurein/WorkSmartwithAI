@@ -27,7 +27,7 @@ else:
     print("⚠️ GOOGLE_API_KEY missing!")
 
 # ==========================================
-# ၂။ KNOWLEDGE BASE (ဒီနေရာမှာ မိတ်ဆွေ စိတ်ကြိုက် အချက်အလက်တွေ ထည့်ပါ)
+# ၂။ KNOWLEDGE BASE (မိတ်ဆွေ ထပ်ဖြည့်ချင်တာတွေကို ဒီမှာ စာသားအတိုင်း ဖြည့်ရုံပါပဲ)
 # ==========================================
 KNOWLEDGE_BASE = """
 [သင်တန်း အချက်အလက်များ]
@@ -37,6 +37,12 @@ KNOWLEDGE_BASE = """
 - သင်ကြားမည့်ပုံစံ: Zoom ဖြင့် တိုက်ရိုက်သင်ကြားပြီး Telegram တွင် Lifetime Record ပြန်ကြည့်နိုင်ပါသည်။
 - သင်တန်းဆင်းလက်မှတ်: Digital Certificate ထုတ်ပေးပါသည်။
 
+[အပ်နှံပြီးသူများအတွက် FAQ]
+- သင်တန်းအပ်ပြီးလျှင် Admin မှ ဖုန်းဆက်သွယ်ပြီး Payment အတည်ပြုပါမည်။
+- Payment ပြီးလျှင် Telegram Discussion Group သို့ Link ပို့ပေးပါမည်။
+- သင်တန်းတက်ရန် Laptop လိုအပ်သော်လည်း ဖုန်းဖြင့်လည်း လေ့လာနိုင်ပါသည်။
+- သင်တန်းကြေးကို KPay (သို့) Wave Money ဖြင့် ပေးသွင်းနိုင်ပါသည်။
+
 [ဝန်ဆောင်မှုများ]
 - Social Media Design Class: သင်တန်းကြေး ၁ သိန်းခွဲ။
 - Chat Bot Training: သင်တန်းကြေး ၃ သိန်း။
@@ -45,7 +51,7 @@ KNOWLEDGE_BASE = """
 [စည်းကမ်းချက်များ]
 - သင်ဟာ 'Work Smart with AI' ရဲ့ Professional Sales Admin (ယောကျားလေး) ဖြစ်ပါတယ်။
 - နာမ်စားကို 'ကျွန်တော်' ဟု သုံးပြီး လူကြီးမင်းတို့အား ယဉ်ကျေးစွာ ဆက်ဆံပါ။
-- မသိသောအချက်အလက်များကို လျှောက်မဖြေဘဲ Admin နှင့် ပြန်လည်ညှိနှိုင်းပေးမည်ဟု ပြောပါ။
+- အချက်အလက်တောင်းလျှင် တစ်ခုချင်းစီ သီးသန့်တောင်းပါ။ ပြောပြီးသား အချက်အလက်ကို ထပ်မတောင်းပါနှင့်။
 """
 
 # ==========================================
@@ -89,37 +95,43 @@ def save_data(sender_id, data):
     except: pass
 
 # ==========================================
-# ၄။ CHAT LOGIC (STABILITY + KB MODE)
+# ၄။ SMART CHAT LOGIC (NO LOOP MODE)
 # ==========================================
 def ask_gemini(sender_id, message):
-    # 1. Extraction from message
-    ext_prompt = f"Analyze: '{message}'. Extract Name, Phone. If want to change info, set 'edit': true. Return JSON: {{'name': '...', 'phone': '...', 'edit': false}}"
+    # ၁။ Data Extraction (နောက်ကွယ်မှာ တိတ်တဆိတ် လုပ်မယ်)
+    ext_prompt = f"Analyze: '{message}'. Extract Name, Phone. If user wants to change info, set 'edit': true. Return JSON ONLY: {{'name': '...', 'phone': '...', 'edit': false}}"
     try:
         res = model.generate_content(ext_prompt)
         ext = json.loads(re.search(r'\{.*\}', res.text, re.DOTALL).group(0))
     except:
         ext = {"name": "N/A", "phone": "N/A", "edit": False}
 
-    # 2. Sheet Status
+    # ၂။ ဒေတာ သိမ်းဆည်းခြင်း
     current = fetch_data(sender_id)
     if ext['name'] != 'N/A' or ext['phone'] != 'N/A':
         save_data(sender_id, ext)
         current = fetch_data(sender_id)
 
-    # 3. Instruction Building
-    status = ""
+    # ၃။ AI အား ပေးမည့် Instruction (Status Check)
+    status_instruction = ""
     if ext['edit']:
-        status = "[SYSTEM: User wants to EDIT. Ignore full status and ask for new info politely.]"
+        status_instruction = "[SYSTEM: User wants to EDIT info. Forget the current status and ask for new details politely.]"
     elif current['name'] != 'N/A' and current['phone'] != 'N/A':
-        status = f"[SYSTEM: DATA COLLECTED. Name: {current['name']}, Phone: {current['phone']}. Answer questions from KB only. Do not ask for info again.]"
-    
-    # 4. Final Prompting
+        status_instruction = f"[SYSTEM: DATA COLLECTED. User Name: {current['name']}, Phone: {current['phone']}. Do NOT ask for these again. Focus only on answering questions from KB.]"
+    elif current['name'] == 'N/A':
+        status_instruction = "[SYSTEM: Name is missing. If user is ready to register, ask for Name politely.]"
+    elif current['phone'] == 'N/A':
+        status_instruction = f"[SYSTEM: Name is {current['name']}, but Phone is missing. Ask for Phone number.]"
+
+    # ၄။ Final Chatting
     if sender_id not in user_sessions:
         user_sessions[sender_id] = model.start_chat(history=[])
 
-    full_prompt = f"{KNOWLEDGE_BASE}\n\n{status}\n\nUser: {message}"
+    # KB + Status + User Message ကို ပေါင်းပြီး AI ဆီ ပို့မယ်
+    chat_prompt = f"{KNOWLEDGE_BASE}\n\n{status_instruction}\n\nUser Message: {message}"
+    
     try:
-        return user_sessions[sender_id].send_message(full_prompt).text
+        return user_sessions[sender_id].send_message(chat_prompt).text
     except:
         return "ခဏနေမှ ပြန်မေးပေးပါခင်ဗျာ။"
 
@@ -140,7 +152,11 @@ def webhook():
                 if "message" in event and "text" in event["message"] and not event["message"].get("is_echo"):
                     sid = event["sender"]["id"]
                     txt = event["message"]["text"]
+                    
+                    # AI ဆီက အဖြေတောင်းမယ်
                     rep = ask_gemini(sid, txt)
+                    
+                    # Messenger ဆီ ပြန်ပို့မယ်
                     requests.post(f"https://graph.facebook.com/v12.0/me/messages?access_token={PAGE_ACCESS_TOKEN}", 
                                   json={"recipient": {"id": sid}, "message": {"text": rep}})
     return "OK", 200
