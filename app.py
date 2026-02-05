@@ -90,17 +90,15 @@ def handle_bot_process(sid, txt):
     kb = """
     သင်ဟာ 'Work Smart with AI' ရဲ့ Professional Sales Admin (ကျွန်တော်) ဖြစ်ပါတယ်။
     [KNOWLEDGE BASE]
-    - AI Sales Content Class: စမည့်ရက် မေလ ၂ ရက် (၂.၅.၂၀၂၆)၊ စနေ၊ တနင်္ဂနွေ ည ၈ နာရီ။
+    - AI Sales Content Class: စမည့်ရက် မေလ ၂ ရက် (၂.၅.၂၀၂၆)၊ စနေ၊ တနင်္ဂနွေ ည ၈ နာရီမှ ၉ နာရီခွဲ။
     - သင်တန်းကြေး: ၂၀၀,၀၀၀ ကျပ် (Early Bird: ၁၅၀,၀၀၀ ကျပ်)။
-    - ဝန်ဆောင်မှုများ: AI Content (150k), Design Class (150k), Chatbot Training (300k), Auto Bot Service.
-    - Platform: Zoom Live + Telegram Lifetime record.
+    - ဝန်ဆောင်မှုများ: AI Sales Content Creation (150k), Social Media Design (150k), Chatbot Training (300k), Auto Bot Service.
+    - Platform: Zoom Live + Telegram Lifetime record access.
     - နာမ်စား: 'လူကြီးမင်း' ဟုသုံးပြီး မိမိကိုယ်ကို 'ကျွန်တော်' ဟု သုံးပါ။
     """
     
     status_context = "ဒေတာမပြည့်စုံသေးပါ။ နာမည်နှင့် ဖုန်းနံပါတ်ကို ယဉ်ကျေးစွာတောင်းပါ။"
-    if "reset" in txt.lower():
-         status_context = "Reset လုပ်ပြီးပါပြီ။ နာမည်ပြန်တောင်းပါ။"
-    elif current['name'] != 'N/A' and current['phone'] != 'N/A':
+    if current['name'] != 'N/A' and current['phone'] != 'N/A':
         status_context = f"ဒေတာရပြီးသား (နာမည်: {current['name']}, ဖုန်း: {current['phone']}) ဖြစ်သည်။ ဒေတာထပ်မတောင်းပါနှင့်။ မေးခွန်းရှိလျှင် KB ထဲမှ ဖြေကြားပါ။"
 
     # (ဂ) Response Generation
