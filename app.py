@@ -70,54 +70,51 @@ def save_data(sender_id, name, phone):
         print(f"🔴 Sheet Save Error: {e}")
 
 # ==========================================
-# ၃။ CORE BOT PROCESS (ASYNCHRONOUS)
+# ၃။ CORE BOT PROCESS (THE FIX: RUNS ASYNC)
 # ==========================================
 def handle_bot_process(sid, txt):
-    # (က) Data Extraction - f-string syntax fix for JSON braces {{ }}
+    # (က) Data Extraction - JSON syntax fix {{ }}
     extract_prompt = f"Extract Name and Phone from: '{txt}'. Return JSON: {{\"name\": \"...\", \"phone\": \"...\", \"edit\": false}}"
     try:
         ext_res = model.generate_content(extract_prompt).text
         json_match = re.search(r'\{.*\}', ext_res, re.DOTALL)
         if json_match:
             ext_data = json.loads(json_match.group(0))
-            if ext_data.get('name') != 'N/A' or ext_data.get('phone') != 'N/S':
+            if ext_data.get('name') != 'N/A' or ext_data.get('phone') != 'N/A':
                 save_data(sid, ext_data.get('name', 'N/A'), ext_data.get('phone', 'N/A'))
     except Exception as e:
         print(f"🔴 AI Extract Error: {e}")
 
-    # (ခ) Full Knowledge Base & Context Check
+    # (ခ) Full Knowledge Base
     current = fetch_data(sid)
     kb = """
     သင်ဟာ 'Work Smart with AI' ရဲ့ Professional Sales Admin (ကျွန်တော်) ဖြစ်ပါတယ်။
-    
-    [ဗဟုသုတဘဏ် - Knowledge Base]
+    [KNOWLEDGE BASE]
     - AI Sales Content Class: စမည့်ရက် မေလ ၂ ရက် (၂.၅.၂၀၂၆)၊ စနေ၊ တနင်္ဂနွေ ည ၈ နာရီ။
     - သင်တန်းကြေး: ၂၀၀,၀၀၀ ကျပ် (Early Bird: ၁၅၀,၀၀၀ ကျပ်)။
-    - ဝန်ဆောင်မှုများ: 
-        1. AI Sales Content Creation (150k)
-        2. Social Media Design Class (150k)
-        3. Chatbot Training (300k)
-        4. Auto Bot Service (Custom Price)
-    - သင်ကြားမှု: Zoom Live + Telegram Lifetime record access.
-    - Certificate: သင်တန်းဆင်းလက်မှတ် (Digital) ပေးအပ်ပါတယ်။
-    - နာမ်စား: လူကြီးမင်းကို 'လူကြီးမင်း' ဟုသုံးပြီး မိမိကိုယ်ကို 'ကျွန်တော်' ဟု သုံးပါ။
+    - ဝန်ဆောင်မှုများ: AI Content (150k), Design Class (150k), Chatbot Training (300k), Auto Bot Service.
+    - Platform: Zoom Live + Telegram Lifetime record.
+    - နာမ်စား: 'လူကြီးမင်း' ဟုသုံးပြီး မိမိကိုယ်ကို 'ကျွန်တော်' ဟု သုံးပါ။
     """
     
     status_context = "ဒေတာမပြည့်စုံသေးပါ။ နာမည်နှင့် ဖုန်းနံပါတ်ကို ယဉ်ကျေးစွာတောင်းပါ။"
-    if current['name'] != 'N/A' and current['phone'] != 'N/A':
+    if "reset" in txt.lower():
+         status_context = "Reset လုပ်ပြီးပါပြီ။ နာမည်ပြန်တောင်းပါ။"
+    elif current['name'] != 'N/A' and current['phone'] != 'N/A':
         status_context = f"ဒေတာရပြီးသား (နာမည်: {current['name']}, ဖုန်း: {current['phone']}) ဖြစ်သည်။ ဒေတာထပ်မတောင်းပါနှင့်။ မေးခွန်းရှိလျှင် KB ထဲမှ ဖြေကြားပါ။"
 
     # (ဂ) Response Generation
     final_prompt = f"{kb}\n\nContext: {status_context}\n\nUser Message: {txt}\n\nယဉ်ကျေးစွာ မြန်မာလို ပြန်ဖြေပါ:"
     try:
         reply = model.generate_content(final_prompt).text
+        # Facebook ဆီသို့ စာပြန်ပို့ခြင်း
         requests.post(f"https://graph.facebook.com/v12.0/me/messages?access_token={PAGE_ACCESS_TOKEN}", 
                       json={"recipient": {"id": sid}, "message": {"text": reply}})
     except Exception as e:
-        print(f"🔴 FB Send Error: {e}")
+        print(f"🔴 AI Response Error: {e}")
 
 # ==========================================
-# ၄။ WEBHOOK ROUTE (LOOP KILLER)
+# ၄။ WEBHOOK ROUTE (LOOP KILLER SYSTEM)
 # ==========================================
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
@@ -135,10 +132,10 @@ def webhook():
                         sid = event["sender"]["id"]
                         txt = event["message"]["text"]
                         
-                        # Thread သုံးပြီး Facebook timeout နှင့် loop ပတ်ခြင်းကို ကာကွယ်သည်
+                        # [CRITICAL FIX] Facebook Timeout မဖြစ်အောင် Thread သုံးပြီး အလုပ်လုပ်ခိုင်းခြင်း
+                        # Facebook ကို ချက်ချင်း 'EVENT_RECEIVED' (200 OK) ပြန်ပို့ပေးပါမည်
                         Thread(target=handle_bot_process, args=(sid, txt)).start()
             
-            # Facebook ကို ချက်ချင်း 'OK' ပြန်ပို့ခြင်းဖြင့် Loop ပတ်ခြင်းကို တားဆီးသည်
             return "EVENT_RECEIVED", 200
     return "Not Found", 404
 
