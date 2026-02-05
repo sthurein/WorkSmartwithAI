@@ -12,7 +12,7 @@ from google.oauth2.service_account import Credentials
 app = Flask(__name__)
 
 # ==========================================
-# ၁။ CONFIGURATION & AUTH (ပတ်ဝန်းကျင်ကိန်းရှင်များ)
+# ၁။ CONFIGURATION & AUTH
 # ==========================================
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 PAGE_ACCESS_TOKEN = os.environ.get("PAGE_ACCESS_TOKEN")
@@ -26,7 +26,7 @@ else:
     print("⚠️ CRITICAL: GOOGLE_API_KEY is missing!")
 
 # ==========================================
-# ၂။ GOOGLE SHEETS FUNCTIONS (ဒေတာ သိမ်းဆည်း/ဖတ်ရှုခြင်း)
+# ၂။ GOOGLE SHEETS FUNCTIONS
 # ==========================================
 def get_google_creds():
     try:
@@ -34,11 +34,14 @@ def get_google_creds():
         creds_json = json.loads(base64.b64decode(SERVICE_ACCOUNT_ENCODED).decode("utf-8"))
         scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         return Credentials.from_service_account_info(creds_json, scopes=scope)
-    except: return None
+    except Exception as e:
+        print(f"🔴 Creds Error: {e}")
+        return None
 
 def fetch_data(sender_id):
     try:
         creds = get_google_creds()
+        if not creds: return {"name": "N/A", "phone": "N/A"}
         client = gspread.authorize(creds)
         sheet = client.open("WorkSmart_Leads").sheet1
         cell = sheet.find(str(sender_id), in_column=1)
@@ -51,6 +54,7 @@ def fetch_data(sender_id):
 def save_data(sender_id, name, phone):
     try:
         creds = get_google_creds()
+        if not creds: return
         client = gspread.authorize(creds)
         sheet = client.open("WorkSmart_Leads").sheet1
         try:
@@ -62,25 +66,27 @@ def save_data(sender_id, name, phone):
             if phone != 'N/A': sheet.update_cell(cell.row, 3, phone)
         else:
             sheet.append_row([str(sender_id), name, phone, "N/A"])
-    except: pass
+    except Exception as e:
+        print(f"🔴 Sheet Save Error: {e}")
 
 # ==========================================
-# ၃။ CORE BOT PROCESS (ဗဟုသုတဘဏ်နှင့် Logic များ)
+# ၃။ CORE BOT PROCESS (ASYNCHRONOUS)
 # ==========================================
 def handle_bot_process(sid, txt):
-    # (က) Data Extraction - စာသားထဲမှ အချက်အလက် ထုတ်ယူခြင်း
-    extract_prompt = f"Extract Name and Phone from: '{txt}'. Return JSON: {{"name": "...", "phone": "...", "edit": false}}"
+    # (က) Data Extraction - f-string syntax fix for JSON braces {{ }}
+    extract_prompt = f"Extract Name and Phone from: '{txt}'. Return JSON: {{\"name\": \"...\", \"phone\": \"...\", \"edit\": false}}"
     try:
         ext_res = model.generate_content(extract_prompt).text
-        ext_data = json.loads(re.search(r'\{.*\}', ext_res, re.DOTALL).group(0))
-        if ext_data['name'] != 'N/A' or ext_data['phone'] != 'N/A':
-            save_data(sid, ext_data['name'], ext_data['phone'])
-    except: 
-        ext_data = {"name": "N/A", "phone": "N/A", "edit": False}
+        json_match = re.search(r'\{.*\}', ext_res, re.DOTALL)
+        if json_match:
+            ext_data = json.loads(json_match.group(0))
+            if ext_data.get('name') != 'N/A' or ext_data.get('phone') != 'N/S':
+                save_data(sid, ext_data.get('name', 'N/A'), ext_data.get('phone', 'N/A'))
+    except Exception as e:
+        print(f"🔴 AI Extract Error: {e}")
 
-    # (ခ) Status & Full Knowledge Base (ဗဟုသုတဘဏ်)
+    # (ခ) Full Knowledge Base & Context Check
     current = fetch_data(sid)
-    
     kb = """
     သင်ဟာ 'Work Smart with AI' ရဲ့ Professional Sales Admin (ကျွန်တော်) ဖြစ်ပါတယ်။
     
@@ -97,25 +103,21 @@ def handle_bot_process(sid, txt):
     - နာမ်စား: လူကြီးမင်းကို 'လူကြီးမင်း' ဟုသုံးပြီး မိမိကိုယ်ကို 'ကျွန်တော်' ဟု သုံးပါ။
     """
     
-    # (ဂ) Context Logic - အခြေအနေအရ စာပြန်ရန် ညွှန်ကြားချက်
     status_context = "ဒေတာမပြည့်စုံသေးပါ။ နာမည်နှင့် ဖုန်းနံပါတ်ကို ယဉ်ကျေးစွာတောင်းပါ။"
-    if "ပြင်" in txt or "wrong" in txt.lower() or "change" in txt.lower():
-        status_context = "User က ဒေတာပြင်ချင်နေတာပါ။ အချက်အလက်အသစ်ကို ယဉ်ကျေးစွာ ပြန်တောင်းပေးပါ။"
-    elif current['name'] != 'N/A' and current['phone'] != 'N/A':
+    if current['name'] != 'N/A' and current['phone'] != 'N/A':
         status_context = f"ဒေတာရပြီးသား (နာမည်: {current['name']}, ဖုန်း: {current['phone']}) ဖြစ်သည်။ ဒေတာထပ်မတောင်းပါနှင့်။ မေးခွန်းရှိလျှင် KB ထဲမှ ဖြေကြားပါ။"
 
-    # (ဃ) Generate Response - အဖြေထုတ်လုပ်ခြင်း
+    # (ဂ) Response Generation
     final_prompt = f"{kb}\n\nContext: {status_context}\n\nUser Message: {txt}\n\nယဉ်ကျေးစွာ မြန်မာလို ပြန်ဖြေပါ:"
     try:
         reply = model.generate_content(final_prompt).text
-        # Facebook ဆီသို့ စာပြန်ပို့ခြင်း
         requests.post(f"https://graph.facebook.com/v12.0/me/messages?access_token={PAGE_ACCESS_TOKEN}", 
                       json={"recipient": {"id": sid}, "message": {"text": reply}})
     except Exception as e:
-        print(f"🔴 AI Response Error: {e}")
+        print(f"🔴 FB Send Error: {e}")
 
 # ==========================================
-# ၄။ WEBHOOK ROUTE (LOOP KILLER SYSTEM)
+# ၄။ WEBHOOK ROUTE (LOOP KILLER)
 # ==========================================
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
@@ -133,7 +135,7 @@ def webhook():
                         sid = event["sender"]["id"]
                         txt = event["message"]["text"]
                         
-                        # [IMPORTANT] Facebook Timeout မဖြစ်အောင် Thread သုံးပြီး အလုပ်လုပ်ခိုင်းခြင်း
+                        # Thread သုံးပြီး Facebook timeout နှင့် loop ပတ်ခြင်းကို ကာကွယ်သည်
                         Thread(target=handle_bot_process, args=(sid, txt)).start()
             
             # Facebook ကို ချက်ချင်း 'OK' ပြန်ပို့ခြင်းဖြင့် Loop ပတ်ခြင်းကို တားဆီးသည်
