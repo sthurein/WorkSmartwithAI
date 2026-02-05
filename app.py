@@ -4,6 +4,7 @@ import gspread
 import requests
 import re
 import base64
+from threading import Thread
 from flask import Flask, request, jsonify
 import google.generativeai as genai
 from google.oauth2.service_account import Credentials
@@ -11,7 +12,7 @@ from google.oauth2.service_account import Credentials
 app = Flask(__name__)
 
 # ==========================================
-# ၁။ CONFIGURATION
+# ၁။ CONFIGURATION & AUTH (ပတ်ဝန်းကျင်ကိန်းရှင်များ)
 # ==========================================
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 PAGE_ACCESS_TOKEN = os.environ.get("PAGE_ACCESS_TOKEN")
@@ -22,10 +23,10 @@ if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
     model = genai.GenerativeModel('gemini-flash-latest')
 else:
-    print("⚠️ GOOGLE_API_KEY missing!")
+    print("⚠️ CRITICAL: GOOGLE_API_KEY is missing!")
 
 # ==========================================
-# ၂။ GOOGLE SHEETS FUNCTIONS
+# ၂။ GOOGLE SHEETS FUNCTIONS (ဒေတာ သိမ်းဆည်း/ဖတ်ရှုခြင်း)
 # ==========================================
 def get_google_creds():
     try:
@@ -64,77 +65,64 @@ def save_data(sender_id, name, phone):
     except: pass
 
 # ==========================================
-# ၃။ CHAT LOGIC (ANTI-LOOP & HIGH STABILITY)
+# ၃။ CORE BOT PROCESS (ဗဟုသုတဘဏ်နှင့် Logic များ)
 # ==========================================
-def ask_gemini(sender_id, user_message):
-    # ၁။ လက်ရှိ Sheet ထဲက status ကို အရင်ကြည့်မယ်
-    current = fetch_data(sender_id)
-    
-    # ၂။ AI ကို လက်ရှိစာထဲက ဒေတာထုတ်ခိုင်းမယ် (Extraction)
-    extract_prompt = f"""
-    User Message: "{user_message}"
-    Task: Extract Name and Phone if present. 
-    If user wants to "change/edit/wrong/ပြင်/မှား/မဟုတ်ဘူး", set "edit": true.
-    Return JSON ONLY: {{"name": "...", "phone": "...", "edit": false}}
-    """
+def handle_bot_process(sid, txt):
+    # (က) Data Extraction - စာသားထဲမှ အချက်အလက် ထုတ်ယူခြင်း
+    extract_prompt = f"Extract Name and Phone from: '{txt}'. Return JSON: {{"name": "...", "phone": "...", "edit": false}}"
     try:
         ext_res = model.generate_content(extract_prompt).text
         ext_data = json.loads(re.search(r'\{.*\}', ext_res, re.DOTALL).group(0))
-        
-        # ၃။ ဒေတာအသစ်ပါရင် သိမ်းမယ်
         if ext_data['name'] != 'N/A' or ext_data['phone'] != 'N/A':
-            save_data(sender_id, ext_data['name'], ext_data['phone'])
-            current = fetch_data(sender_id) # status refresh
-    except:
-        ext_data = {"edit": False}
+            save_data(sid, ext_data['name'], ext_data['phone'])
+    except: 
+        ext_data = {"name": "N/A", "phone": "N/A", "edit": False}
 
-    # ၄။ စကားပြန်ပြောမည့်အပိုင်း (No History Mode)
-    knowledge_base = """
-    သင်ဟာ 'Work Smart with AI' ရဲ့ Professional Sales Admin တစ်ယောက်ပါ။
-    - သင်တန်းစမည့်ရက်: မေလ ၂ ရက် (၂.၅.၂၀၂၆)၊ စနေ၊ တနင်္ဂနွေ ည ၈ နာရီမှ ၉ နာရီခွဲ။
+    # (ခ) Status & Full Knowledge Base (ဗဟုသုတဘဏ်)
+    current = fetch_data(sid)
+    
+    kb = """
+    သင်ဟာ 'Work Smart with AI' ရဲ့ Professional Sales Admin (ကျွန်တော်) ဖြစ်ပါတယ်။
+    
+    [ဗဟုသုတဘဏ် - Knowledge Base]
+    - AI Sales Content Class: စမည့်ရက် မေလ ၂ ရက် (၂.၅.၂၀၂၆)၊ စနေ၊ တနင်္ဂနွေ ည ၈ နာရီ။
     - သင်တန်းကြေး: ၂၀၀,၀၀၀ ကျပ် (Early Bird: ၁၅၀,၀၀၀ ကျပ်)။
-    - ဝန်ဆောင်မှုများ: AI Content Class, Social Media Design (150k), Chatbot Training (300k)။
-    - သင်ကြားမှု: Zoom Live + Telegram Lifetime Records။
-    - နာမ်စား: 'ကျွန်တော်' ကိုသုံးပါ။ လူကြီးမင်းကို 'လူကြီးမင်း' ဟု သုံးပါ။
-    - Payment: Admin မှ ဖုန်းဆက်သွယ်ပြီးမှ ပေးသွင်းရပါမည်။
+    - ဝန်ဆောင်မှုများ: 
+        1. AI Sales Content Creation (150k)
+        2. Social Media Design Class (150k)
+        3. Chatbot Training (300k)
+        4. Auto Bot Service (Custom Price)
+    - သင်ကြားမှု: Zoom Live + Telegram Lifetime record access.
+    - Certificate: သင်တန်းဆင်းလက်မှတ် (Digital) ပေးအပ်ပါတယ်။
+    - နာမ်စား: လူကြီးမင်းကို 'လူကြီးမင်း' ဟုသုံးပြီး မိမိကိုယ်ကို 'ကျွန်တော်' ဟု သုံးပါ။
     """
-
-    status_context = ""
-    if ext_data.get('edit'):
-        status_context = "User က အချက်အလက်မှားလို့ ပြင်ချင်တာပါ။ နာမည် သို့မဟုတ် ဖုန်းနံပါတ်အသစ်ကို ယဉ်ကျေးစွာ ထပ်တောင်းပါ။"
+    
+    # (ဂ) Context Logic - အခြေအနေအရ စာပြန်ရန် ညွှန်ကြားချက်
+    status_context = "ဒေတာမပြည့်စုံသေးပါ။ နာမည်နှင့် ဖုန်းနံပါတ်ကို ယဉ်ကျေးစွာတောင်းပါ။"
+    if "ပြင်" in txt or "wrong" in txt.lower() or "change" in txt.lower():
+        status_context = "User က ဒေတာပြင်ချင်နေတာပါ။ အချက်အလက်အသစ်ကို ယဉ်ကျေးစွာ ပြန်တောင်းပေးပါ။"
     elif current['name'] != 'N/A' and current['phone'] != 'N/A':
-        status_context = f"ဒေတာရပြီးသားဖြစ်သည် (နာမည်: {current['name']}, ဖုန်း: {current['phone']})။ ထပ်မတောင်းပါနဲ့။ လူကြီးမင်းအတွက် ဘာများကူညီပေးရမလဲဟုသာ မေးပါ။"
-    else:
-        status_context = "နာမည် သို့မဟုတ် ဖုန်းနံပါတ် မပြည့်စုံသေးပါ။ ယဉ်ကျေးစွာ တောင်းခံပေးပါ။"
+        status_context = f"ဒေတာရပြီးသား (နာမည်: {current['name']}, ဖုန်း: {current['phone']}) ဖြစ်သည်။ ဒေတာထပ်မတောင်းပါနှင့်။ မေးခွန်းရှိလျှင် KB ထဲမှ ဖြေကြားပါ။"
 
-    final_prompt = f"""
-    {knowledge_base}
-    
-    [IMPORTANT CONTEXT]
-    {status_context}
-    
-    [USER LATEST MESSAGE]
-    {user_message}
-    
-    အထက်ပါအချက်များကို အခြေခံ၍ လူကြီးမင်း၏ မေးခွန်းကို တိုတိုနှင့် ရှင်းရှင်းလင်းလင်း မြန်မာလို ပြန်ဖြေပေးပါ။
-    """
-    
+    # (ဃ) Generate Response - အဖြေထုတ်လုပ်ခြင်း
+    final_prompt = f"{kb}\n\nContext: {status_context}\n\nUser Message: {txt}\n\nယဉ်ကျေးစွာ မြန်မာလို ပြန်ဖြေပါ:"
     try:
-        # History လုံးဝ မသုံးဘဲ လတ်တလောစာကိုပဲ ဖြေခိုင်းခြင်းဖြင့် Loop ပိတ်သည်
-        response = model.generate_content(final_prompt)
-        return response.text
-    except:
-        return "ခဏနေမှ ပြန်မေးပေးပါခင်ဗျာ။"
+        reply = model.generate_content(final_prompt).text
+        # Facebook ဆီသို့ စာပြန်ပို့ခြင်း
+        requests.post(f"https://graph.facebook.com/v12.0/me/messages?access_token={PAGE_ACCESS_TOKEN}", 
+                      json={"recipient": {"id": sid}, "message": {"text": reply}})
+    except Exception as e:
+        print(f"🔴 AI Response Error: {e}")
 
 # ==========================================
-# ၄။ WEBHOOK ROUTE
+# ၄။ WEBHOOK ROUTE (LOOP KILLER SYSTEM)
 # ==========================================
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
     if request.method == 'GET':
         if request.args.get("hub.verify_token") == VERIFY_TOKEN:
             return request.args.get("hub.challenge")
-        return "Forbidden", 403
+        return "Fail", 403
     
     if request.method == 'POST':
         body = request.json
@@ -145,13 +133,11 @@ def webhook():
                         sid = event["sender"]["id"]
                         txt = event["message"]["text"]
                         
-                        # AI အဖြေကို Generate လုပ်သည်
-                        reply = ask_gemini(sid, txt)
-                        
-                        # Facebook Messenger ဆီ တိုက်ရိုက်ပို့သည်
-                        requests.post(f"https://graph.facebook.com/v12.0/me/messages?access_token={PAGE_ACCESS_TOKEN}", 
-                                      json={"recipient": {"id": sid}, "message": {"text": reply}})
-            return "OK", 200
+                        # [IMPORTANT] Facebook Timeout မဖြစ်အောင် Thread သုံးပြီး အလုပ်လုပ်ခိုင်းခြင်း
+                        Thread(target=handle_bot_process, args=(sid, txt)).start()
+            
+            # Facebook ကို ချက်ချင်း 'OK' ပြန်ပို့ခြင်းဖြင့် Loop ပတ်ခြင်းကို တားဆီးသည်
+            return "EVENT_RECEIVED", 200
     return "Not Found", 404
 
 if __name__ == '__main__':
