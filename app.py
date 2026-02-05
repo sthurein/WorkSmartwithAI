@@ -1,143 +1,287 @@
 import os
 import json
+import time
 import gspread
 import requests
 import re
 import base64
-from threading import Thread
 from flask import Flask, request, jsonify
 import google.generativeai as genai
-from google.oauth2.service_account import Credentials
+from google.oauth2.service_account import Credentials 
 
 app = Flask(__name__)
 
 # ==========================================
-# ၁။ CONFIGURATION
+# ၁။ CONFIGURATION & AUTH
 # ==========================================
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
-MANYCHAT_API_KEY = os.environ.get("MANYCHAT_API_KEY") # ManyChat API Key ထည့်ရန်
+PAGE_ACCESS_TOKEN = os.environ.get("PAGE_ACCESS_TOKEN")
+VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN")
 SERVICE_ACCOUNT_ENCODED = os.environ.get('SERVICE_ACCOUNT_JSON')
 
+# [MODEL SETTING] Using 'gemini-flash-latest'
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
-    model = genai.GenerativeModel('gemini-flash-latest')
+    try:
+        model = genai.GenerativeModel('gemini-flash-latest')
+    except:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+    user_sessions = {} 
+else:
+    print("⚠️ CRITICAL: GOOGLE_API_KEY is missing!")
 
 # ==========================================
 # ၂။ GOOGLE SHEETS HANDLER
 # ==========================================
 def get_google_creds():
     try:
-        if not SERVICE_ACCOUNT_ENCODED: return None
-        creds_json = json.loads(base64.b64decode(SERVICE_ACCOUNT_ENCODED).decode("utf-8"))
+        if not SERVICE_ACCOUNT_ENCODED:
+            print("🔴 Error: Service Account Key not found.")
+            return None
+        
+        try:
+            creds_json = json.loads(SERVICE_ACCOUNT_ENCODED)
+        except:
+            try:
+                decoded_bytes = base64.b64decode(SERVICE_ACCOUNT_ENCODED)
+                decoded_str = decoded_bytes.decode("utf-8")
+                creds_json = json.loads(decoded_str)
+            except Exception as e:
+                print(f"🔴 Base64 Decode Failed: {e}")
+                return None
+
         scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         return Credentials.from_service_account_info(creds_json, scopes=scope)
-    except: return None
-
-def fetch_data(sender_id):
-    try:
-        creds = get_google_creds()
-        client = gspread.authorize(creds)
-        sheet = client.open("WorkSmart_Leads").sheet1
-        cell = sheet.find(str(sender_id), in_column=1)
-        if cell:
-            row = sheet.row_values(cell.row)
-            return {"name": row[1] if len(row)>1 else "N/A", "phone": row[2] if len(row)>2 else "N/A"}
-    except: pass
-    return {"name": "N/A", "phone": "N/A"}
-
-def save_data(sender_id, name, phone):
-    try:
-        creds = get_google_creds()
-        client = gspread.authorize(creds)
-        sheet = client.open("WorkSmart_Leads").sheet1
-        try: cell = sheet.find(str(sender_id), in_column=1)
-        except: cell = None
-        if cell:
-            if name != 'N/A': sheet.update_cell(cell.row, 2, name)
-            if phone != 'N/A': sheet.update_cell(cell.row, 3, phone)
-        else:
-            sheet.append_row([str(sender_id), name, phone, "N/A"])
-    except: pass
-
-# ==========================================
-# ၃။ MANYCHAT API SEND FUNCTION
-# ==========================================
-def send_reply_via_manychat(user_id, text):
-    # subscriber_id နေရာမှာ ManyChat ကပေးတဲ့ user_id ကို သုံးပါမယ်
-    url = "https://api.manychat.com/fb/sending/sendContent"
-    headers = {
-        "Authorization": f"Bearer {MANYCHAT_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "subscriber_id": user_id,
-        "data": {
-            "version": "v2",
-            "content": {
-                "messages": [{"type": "text", "text": text}]
-            }
-        }
-    }
-    try:
-        res = requests.post(url, json=payload, headers=headers)
-        print(f"ManyChat API Status: {res.status_code}")
     except Exception as e:
-        print(f"ManyChat API Error: {e}")
+        print(f"🔴 Credential Error: {e}")
+        return None
+
+def save_to_google_sheet(sender_id, extracted_data):
+    try:
+        creds = get_google_creds()
+        if not creds: return False
+
+        client = gspread.authorize(creds)
+        
+        try:
+            sheet = client.open("WorkSmart_Leads").sheet1
+        except Exception as e:
+            print(f"🔴 Sheet Access Error: {e}")
+            return False
+        
+        name = extracted_data.get('name', 'N/A')
+        phone = extracted_data.get('phone', 'N/A')
+        service = extracted_data.get('service', 'N/A')
+
+        print(f"📝 Processing Lead -> Name: {name} | Phone: {phone} | Service: {service}")
+
+        try:
+            cell = sheet.find(str(sender_id), in_column=1)
+        except gspread.exceptions.CellNotFound:
+            cell = None
+        
+        if cell:
+            row = cell.row
+            if name != 'N/A': sheet.update_cell(row, 2, name)
+            if phone != 'N/A': sheet.update_cell(row, 3, phone)
+            if service != 'N/A': sheet.update_cell(row, 4, service)
+            print(f"✅ Updated Row {row}")
+        else:
+            sheet.append_row([str(sender_id), name, phone, service])
+            print(f"✅ Created New Row")
+            
+        return True
+            
+    except Exception as e:
+        print(f"🔴 Google Sheet Write Error: {e}")
+        return False
 
 # ==========================================
-# ၄။ ASYNC BOT PROCESS (THE LOOP KILLER)
+# ၃။ INTELLIGENT EXTRACTION (4 SERVICES UPDATED)
 # ==========================================
-def handle_bot_process(sid, txt):
-    # (က) Data Extraction
-    extract_prompt = f"Extract Name and Phone from: '{txt}'. Return JSON: {{\"name\": \"...\", \"phone\": \"...\", \"edit\": false}}"
+def check_and_extract_lead(sender_id, current_message):
     try:
-        ext_res = model.generate_content(extract_prompt).text
-        json_match = re.search(r'\{.*\}', ext_res, re.DOTALL)
+        history_text = ""
+        if sender_id in user_sessions:
+            for msg in user_sessions[sender_id].history:
+                role = "User" if msg.role == "user" else "Bot"
+                history_text += f"{role}: {msg.parts[0].text}\n"
+        
+        history_text += f"User (Latest): {current_message}\n"
+
+        # [CRITICAL UPDATE] Service Lists
+        prompt = f"""
+        Analyze the conversation. Extract Name, Phone, and Interested Service.
+        
+        [YOUR 4 SPECIFIC SERVICES]
+        1. "AI Sales Content Creation" (AI နဲ့ အရောင်း Post တင်ဖို့ Content ဖန်တီးနည်း). သင်တန်းကြေး ၂၀၀,၀၀၀ ကျပ် (Early Bird: ၁၅၀,၀၀၀ ကျပ်).
+        2. "Auto Bot Service" (Facebook Page, Telegram အတွက် Auto Bot ဝန်ဆောင်မှု).
+        3. "Social Media Design Class" (Social Media ပုံတွေ, Logo တွေထုတ်နည်း). သင်တန်းကြေး ၁၅၀,၀၀၀ ကျပ်.
+        4. "Chat Bot Training" (Facebook Page, Telegram အရောင်း Chat Bot ထောင်နည်းသင်တန်း). သင်တန်းကြေး ၃၀၀,၀၀၀ ကျပ်.
+        
+        [EXTRACTION RULES]
+        1. **NAME:** Capture ANY name provided (e.g., "Mg Mg", "My name is...").
+        2. **PHONE:** Capture 09... or +959... numbers.
+        3. **SERVICE:** Map user interest to one of the 4 services above.
+        4. IF MISSING: Use "N/A".
+        5. OUTPUT FORMAT: STRICT JSON only.
+        
+        Conversation:
+        {history_text}
+        
+        JSON Output: {{"name": "...", "phone": "...", "service": "..."}}
+        """
+        
+        response = model.generate_content(prompt)
+        text_response = response.text.strip()
+        
+        if "```" in text_response:
+            text_response = text_response.replace("```json", "").replace("```", "")
+        
+        json_match = re.search(r'\{.*\}', text_response, re.DOTALL)
+        
         if json_match:
-            ext_data = json.loads(json_match.group(0))
-            if ext_data.get('name') != 'N/A' or ext_data.get('phone') != 'N/A':
-                save_data(sid, ext_data.get('name', 'N/A'), ext_data.get('phone', 'N/A'))
-    except: pass
+            lead_data = json.loads(json_match.group(0))
+            
+            # Save if at least one field is present
+            if lead_data.get('name') != "N/A" or lead_data.get('phone') != "N/A":
+                save_to_google_sheet(sender_id, lead_data)
+                return lead_data
+        
+        return None
+            
+    except Exception as e:
+        print(f"🔴 Extraction Error: {e}")
+        return None
 
-    # (ခ) Knowledge Base
-    current = fetch_data(sid)
-    kb = """
-    သင်ဟာ 'Work Smart with AI' ရဲ့ Professional Sales Admin (ကျွန်တော်) ဖြစ်ပါတယ်။
-    [KNOWLEDGE BASE]
-    - AI Sales Content Class: မေလ ၂ ရက် (၂.၅.၂၀၂၆) စမည်။ Sat-Sun ည ၈ နာရီ။
-    - သင်တန်းကြေး: ၁၅၀,၀၀၀ ကျပ် (Early Bird)။
-    - ဝန်ဆောင်မှု: AI Content Creation, Social Media Design, Chatbot Training.
-    - နာမ်စား: မိမိကိုယ်ကို 'ကျွန်တော်'၊ လူကြီးမင်းကို 'လူကြီးမင်း' ဟု သုံးပါ။
-    """
+# ==========================================
+# ၄။ CHAT LOGIC (ANTI-FREEZE SYSTEM)
+# ==========================================
+def ask_gemini(sender_id, message, extracted_data=None):
     
-    status_context = "ဒေတာမပြည့်စုံသေးပါ။ နာမည်နှင့် ဖုန်းနံပါတ်ကို ယဉ်ကျေးစွာတောင်းပါ။"
-    if current['name'] != 'N/A' and current['phone'] != 'N/A':
-        status_context = f"ဒေတာရပြီးသား (နာမည်: {current['name']}, ဖုန်း: {current['phone']}) ဖြစ်သည်။ ဒေတာထပ်မတောင်းပါနှင့်။"
+    # 1. System Injection (Stronger Override)
+    system_override = ""
+    if extracted_data:
+        name = extracted_data.get('name', 'N/A')
+        phone = extracted_data.get('phone', 'N/A')
+        
+        # Data ဝင်သွားတာနဲ့ ကျန်တဲ့ Context ကို ဖြတ်ချလိုက်မယ် (Anti-Freeze)
+        if name != "N/A" and phone != "N/A":
+            system_override = f"""
+            [SYSTEM COMMAND: STOP EVERYTHING & CONFIRM]
+            User just submitted Name: {name} and Phone: {phone}.
+            
+            ACTION REQUIRED:
+            1. IGNORE any other questions in the latest message.
+            2. ONLY say: "ကျေးဇူးတင်ပါတယ် {name} ခင်ဗျာ။ ဖုန်းနံပါတ် {phone} ကို လက်ခံရရှိပါတယ်"
+            3. Tell them Admin will contact them soon for payment.
+            4. DO NOT ask for data again.
+            """
 
-    final_prompt = f"{kb}\n\nContext: {status_context}\n\nUser Message: {txt}\n\nReply in Burmese:"
-    try:
-        reply = model.generate_content(final_prompt).text
-        send_reply_via_manychat(sid, reply)
-    except: pass
+    # 2. Init Chat
+    if sender_id not in user_sessions:
+        system_instruction = [
+            {
+                "role": "user",
+                "parts": """
+                You are the Professional Admin of 'Work Smart with AI'. You are male (ကျွန်တော်).
+                
+                [SERVICES]
+                1. "AI Sales Content Creation" (200,000 MMK / Disc: 150,000 MMK).
+                2. "Auto Bot Service" (Contact for details).
+                3. "Social Media Design Class" (150,000 MMK).
+                4. "Chat Bot Training" (300,000 MMK).
+
+                [RULES]
+                - Speak primarily in **Burmese** (use "လူကြီးမင်း").
+                - Name နဲ့ ဖုန်းနံပါတ်ကို Conversation တစ်ခုတည်းမှာ မတောင်းပါနဲ့။ 
+                - နာမည်ကို စာတစ်ကြောင်းရိုက်ပြီးပို့ဖို့တောင်းပါ။ ဖုန်းနံပါတ်ကို တစ်ကြောင်းရိုက်ဖို့ ပြောပါ။ 
+                - Do NOT discuss other courses not listed here.
+                - Payment: Admin will contact via phone.
+                - Course Platform: Zoom + Telegram.
+                - **IMPORTANT**: Once Name/Phone is collected, STOP asking. 
+                - ပြောပြီးသား စကားကို ထပ်ခါ ထပ်ခါ မပို့ပါနဲ့။ ကျေးဇူးတင်ကြောင်းကို တိုတိုနဲ့ ရှင်းရှင်းပဲပြောပါ။ 
+                """
+            },
+            { "role": "model", "parts": "Understood. I will follow the 4 services and the rules strictly." }
+        ]
+        user_sessions[sender_id] = model.start_chat(history=system_instruction)
+
+    chat = user_sessions[sender_id]
+    
+    full_message = message
+    if system_override:
+        full_message = f"{message}\n\n{system_override}"
+
+    for attempt in range(3):
+        try:
+            response = chat.send_message(full_message)
+            return response.text
+        except Exception as e:
+            time.sleep(1)
+            if attempt == 2: return "စနစ်ပိုင်းဆိုင်ရာ Error ဖြစ်နေပါသဖြင့် ခဏနေမှ ပြန်မေးပေးပါခင်ဗျာ။"
 
 # ==========================================
-# ၅။ ENDPOINT FOR MANYCHAT (FIXED ROUTE)
+# ၅။ ROUTES
 # ==========================================
+@app.route('/', methods=['GET'])
+def home():
+    return "Bot is Live (4 Services Updated)!", 200
+
+# MANYCHAT HOOK
 @app.route('/manychat', methods=['POST'])
-def manychat_webhook():
+def manychat_hook():
     try:
         data = request.json
-        sid = data.get('user_id')
-        txt = data.get('message')
+        user_id = str(data.get('user_id'))
+        message = data.get('message')
         
-        if sid and txt:
-            # ManyChat ကို ချက်ချင်း 200 OK ပြန်ပို့ပြီး Loop ကိုသတ်မည်
-            Thread(target=handle_bot_process, args=(sid, txt)).start()
-            return jsonify({"status": "success", "message": "Task started"}), 200
-        else:
-            return jsonify({"status": "error", "message": "Missing data"}), 400
+        extracted_data = check_and_extract_lead(user_id, message)
+        bot_reply = ask_gemini(user_id, message, extracted_data)
+        
+        return jsonify({"response": bot_reply}), 200
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        print(f"ManyChat Error: {e}")
+        return jsonify({"response": "Error"}), 500
+
+# FACEBOOK HOOK
+@app.route('/webhook', methods=['GET', 'POST'])
+def fb_webhook_main():
+    if request.method == 'GET':
+        if request.args.get("hub.mode") == "subscribe" and request.args.get("hub.verify_token") == VERIFY_TOKEN:
+            return request.args.get("hub.challenge")
+        return "Verification Failed", 403
+
+    if request.method == 'POST':
+        try:
+            body = request.json
+            if body.get("object") == "page":
+                for entry in body.get("entry", []):
+                    for event in entry.get("messaging", []):
+                        if "message" in event and "text" in event["message"] and not event["message"].get("is_echo"):
+                            sender_id = event["sender"]["id"]
+                            user_text = event["message"]["text"]
+                            
+                            extracted = check_and_extract_lead(sender_id, user_text)
+                            reply = ask_gemini(sender_id, user_text, extracted)
+                            
+                            send_facebook_message(sender_id, reply) 
+                        
+            return "EVENT_RECEIVED", 200
+        except Exception as e:
+            print(f"Webhook Error: {e}")
+            return "ERROR", 500
+    return "Not Found", 404
+
+def send_facebook_message(recipient_id, text):
+    if not PAGE_ACCESS_TOKEN: return
+    url = f"[https://graph.facebook.com/v12.0/me/messages?access_token=](https://graph.facebook.com/v12.0/me/messages?access_token=){PAGE_ACCESS_TOKEN}"
+    payload = {"recipient": {"id": recipient_id}, "message": {"text": text}}
+    headers = {"Content-Type": "application/json"}
+    try:
+        requests.post(url, json=payload, headers=headers)
+    except Exception as e:
+        print(f"FB Send Error: {e}")
 
 if __name__ == '__main__':
     app.run(debug=True, port=os.getenv("PORT", default=5000))
