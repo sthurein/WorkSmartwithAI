@@ -12,11 +12,10 @@ from google.oauth2.service_account import Credentials
 app = Flask(__name__)
 
 # ==========================================
-# ၁။ CONFIGURATION & AUTH
+# ၁။ CONFIGURATION
 # ==========================================
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
-PAGE_ACCESS_TOKEN = os.environ.get("PAGE_ACCESS_TOKEN")
-VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN")
+MANYCHAT_API_KEY = os.environ.get("MANYCHAT_API_KEY") # ManyChat API Key ထည့်ရန်
 SERVICE_ACCOUNT_ENCODED = os.environ.get('SERVICE_ACCOUNT_JSON')
 
 if GOOGLE_API_KEY:
@@ -24,7 +23,7 @@ if GOOGLE_API_KEY:
     model = genai.GenerativeModel('gemini-flash-latest')
 
 # ==========================================
-# ၂။ GOOGLE SHEETS FUNCTIONS
+# ၂။ GOOGLE SHEETS HANDLER
 # ==========================================
 def get_google_creds():
     try:
@@ -51,10 +50,8 @@ def save_data(sender_id, name, phone):
         creds = get_google_creds()
         client = gspread.authorize(creds)
         sheet = client.open("WorkSmart_Leads").sheet1
-        try:
-            cell = sheet.find(str(sender_id), in_column=1)
+        try: cell = sheet.find(str(sender_id), in_column=1)
         except: cell = None
-        
         if cell:
             if name != 'N/A': sheet.update_cell(cell.row, 2, name)
             if phone != 'N/A': sheet.update_cell(cell.row, 3, phone)
@@ -63,10 +60,35 @@ def save_data(sender_id, name, phone):
     except: pass
 
 # ==========================================
-# ၃။ CORE BOT PROCESS (FULL KNOWLEDGE BASE)
+# ၃။ MANYCHAT API SEND FUNCTION
+# ==========================================
+def send_reply_via_manychat(user_id, text):
+    # subscriber_id နေရာမှာ ManyChat ကပေးတဲ့ user_id ကို သုံးပါမယ်
+    url = "https://api.manychat.com/fb/sending/sendContent"
+    headers = {
+        "Authorization": f"Bearer {MANYCHAT_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "subscriber_id": user_id,
+        "data": {
+            "version": "v2",
+            "content": {
+                "messages": [{"type": "text", "text": text}]
+            }
+        }
+    }
+    try:
+        res = requests.post(url, json=payload, headers=headers)
+        print(f"ManyChat API Status: {res.status_code}")
+    except Exception as e:
+        print(f"ManyChat API Error: {e}")
+
+# ==========================================
+# ၄။ ASYNC BOT PROCESS (THE LOOP KILLER)
 # ==========================================
 def handle_bot_process(sid, txt):
-    # (က) Data Extraction - JSON syntax fix {{ }}
+    # (က) Data Extraction
     extract_prompt = f"Extract Name and Phone from: '{txt}'. Return JSON: {{\"name\": \"...\", \"phone\": \"...\", \"edit\": false}}"
     try:
         ext_res = model.generate_content(extract_prompt).text
@@ -77,63 +99,45 @@ def handle_bot_process(sid, txt):
                 save_data(sid, ext_data.get('name', 'N/A'), ext_data.get('phone', 'N/A'))
     except: pass
 
-    # (ခ) Full Knowledge Base
+    # (ခ) Knowledge Base
     current = fetch_data(sid)
-    
     kb = """
     သင်ဟာ 'Work Smart with AI' ရဲ့ Professional Sales Admin (ကျွန်တော်) ဖြစ်ပါတယ်။
-    
-    [ဗဟုသုတဘဏ် - Knowledge Base]
-    - AI Sales Content Class: စမည့်ရက် မေလ ၂ ရက် (၂.၅.၂၀၂၆)၊ စနေ၊ တနင်္ဂနွေ ည ၈ နာရီမှ ၉ နာရီခွဲ။
-    - သင်တန်းကြေး: ၂၀၀,၀၀၀ ကျပ် (Early Bird Discount: ၁၅၀,၀၀၀ ကျပ်)။
-    - ဝန်ဆောင်မှုများ: 
-        1. AI Sales Content Creation (150k)
-        2. Social Media Design Class (150k)
-        3. Chatbot Training (300k)
-        4. Auto Bot Service (Custom Price)
-    - သင်ကြားမှု: Zoom Live Learning + Telegram Lifetime record access.
-    - Certificate: သင်တန်းဆင်းလက်မှတ် (Digital) ပေးအပ်ပါတယ်။
-    - နာမ်စား: လူကြီးမင်းကို 'လူကြီးမင်း' ဟုသုံးပြီး မိမိကိုယ်ကို 'ကျွန်တော်' ဟု သုံးပါ။
+    [KNOWLEDGE BASE]
+    - AI Sales Content Class: မေလ ၂ ရက် (၂.၅.၂၀၂၆) စမည်။ Sat-Sun ည ၈ နာရီ။
+    - သင်တန်းကြေး: ၁၅၀,၀၀၀ ကျပ် (Early Bird)။
+    - ဝန်ဆောင်မှု: AI Content Creation, Social Media Design, Chatbot Training.
+    - နာမ်စား: မိမိကိုယ်ကို 'ကျွန်တော်'၊ လူကြီးမင်းကို 'လူကြီးမင်း' ဟု သုံးပါ။
     """
     
     status_context = "ဒေတာမပြည့်စုံသေးပါ။ နာမည်နှင့် ဖုန်းနံပါတ်ကို ယဉ်ကျေးစွာတောင်းပါ။"
-    if "ပြင်" in txt or "wrong" in txt.lower():
-        status_context = "User က ဒေတာပြင်ချင်နေတာပါ။ အချက်အလက်အသစ်ကို ယဉ်ကျေးစွာ ပြန်တောင်းပေးပါ။"
-    elif current['name'] != 'N/A' and current['phone'] != 'N/A':
-        status_context = f"ဒေတာရပြီးသား (နာမည်: {current['name']}, ဖုန်း: {current['phone']}) ဖြစ်သည်။ ဒေတာထပ်မတောင်းပါနှင့်။ မေးခွန်းရှိလျှင် KB ထဲမှ ဖြေကြားပါ။"
+    if current['name'] != 'N/A' and current['phone'] != 'N/A':
+        status_context = f"ဒေတာရပြီးသား (နာမည်: {current['name']}, ဖုန်း: {current['phone']}) ဖြစ်သည်။ ဒေတာထပ်မတောင်းပါနှင့်။"
 
-    # (ဂ) Response Generation
-    final_prompt = f"{kb}\n\nContext: {status_context}\n\nUser Message: {txt}\n\nယဉ်ကျေးစွာ မြန်မာလို ပြန်ဖြေပါ:"
+    final_prompt = f"{kb}\n\nContext: {status_context}\n\nUser Message: {txt}\n\nReply in Burmese:"
     try:
         reply = model.generate_content(final_prompt).text
-        requests.post(f"https://graph.facebook.com/v12.0/me/messages?access_token={PAGE_ACCESS_TOKEN}", 
-                      json={"recipient": {"id": sid}, "message": {"text": reply}})
+        send_reply_via_manychat(sid, reply)
     except: pass
 
 # ==========================================
-# ၄။ WEBHOOK (LOOP KILLER)
+# ၅။ ENDPOINT FOR MANYCHAT (FIXED ROUTE)
 # ==========================================
-@app.route('/webhook', methods=['GET', 'POST'])
-def webhook():
-    if request.method == 'GET':
-        if request.args.get("hub.verify_token") == VERIFY_TOKEN:
-            return request.args.get("hub.challenge")
-        return "Fail", 403
-    
-    if request.method == 'POST':
-        body = request.json
-        if body.get("object") == "page":
-            for entry in body.get("entry", []):
-                for event in entry.get("messaging", []):
-                    if "message" in event and "text" in event["message"] and not event["message"].get("is_echo"):
-                        sid = event["sender"]["id"]
-                        txt = event["message"]["text"]
-                        
-                        # Thread သုံးပြီး Facebook timeout ကို ကာကွယ်သည်
-                        Thread(target=handle_bot_process, args=(sid, txt)).start()
-            
-            return "EVENT_RECEIVED", 200
-    return "Not Found", 404
+@app.route('/manychat', methods=['POST'])
+def manychat_webhook():
+    try:
+        data = request.json
+        sid = data.get('user_id')
+        txt = data.get('message')
+        
+        if sid and txt:
+            # ManyChat ကို ချက်ချင်း 200 OK ပြန်ပို့ပြီး Loop ကိုသတ်မည်
+            Thread(target=handle_bot_process, args=(sid, txt)).start()
+            return jsonify({"status": "success", "message": "Task started"}), 200
+        else:
+            return jsonify({"status": "error", "message": "Missing data"}), 400
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=os.getenv("PORT", default=5000))
