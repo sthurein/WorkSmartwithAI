@@ -64,7 +64,7 @@ def save_data(sender_id, name, phone):
     except: pass
 
 # ==========================================
-# ၃။ CHAT LOGIC (SINGLE-SHOT REASONING)
+# ၃။ CHAT LOGIC (ANTI-LOOP & HIGH STABILITY)
 # ==========================================
 def ask_gemini(sender_id, user_message):
     # ၁။ လက်ရှိ Sheet ထဲက status ကို အရင်ကြည့်မယ်
@@ -74,7 +74,7 @@ def ask_gemini(sender_id, user_message):
     extract_prompt = f"""
     User Message: "{user_message}"
     Task: Extract Name and Phone if present. 
-    Also, if user wants to change/edit (e.g. "ပြင်ချင်တယ်", "wrong"), set edit to true.
+    If user wants to "change/edit/wrong/ပြင်/မှား/မဟုတ်ဘူး", set "edit": true.
     Return JSON ONLY: {{"name": "...", "phone": "...", "edit": false}}
     """
     try:
@@ -88,40 +88,41 @@ def ask_gemini(sender_id, user_message):
     except:
         ext_data = {"edit": False}
 
-    # ၄။ စကားပြန်ပြောမည့်အပိုင်း (Response Generation)
-    # History မသုံးတော့ဘဲ လက်ရှိ အခြေအနေကိုပဲ Prompt ထဲ တိုက်ရိုက်ထည့်မယ်
+    # ၄။ စကားပြန်ပြောမည့်အပိုင်း (No History Mode)
     knowledge_base = """
-    သင်ဟာ 'Work Smart with AI' ရဲ့ Sales Admin တစ်ယောက်ပါ။
-    - သင်တန်းစမည့်ရက်: မေလ ၂ ရက် (၂.၅.၂၀၂၆)၊ စနေ၊ တနင်္ဂနွေ ည ၈ နာရီ။
-    - သင်တန်းကြေး: ၁၅၀,၀၀၀ ကျပ် (Early Bird)။
-    - ဝန်ဆောင်မှုများ: AI Content Class (150k), Design Class (150k), Chatbot Training (300k)။
-    - သင်ကြားမှု: Zoom + Telegram Records
-    - Digital Certificate ပေးမည်
+    သင်ဟာ 'Work Smart with AI' ရဲ့ Professional Sales Admin တစ်ယောက်ပါ။
+    - သင်တန်းစမည့်ရက်: မေလ ၂ ရက် (၂.၅.၂၀၂၆)၊ စနေ၊ တနင်္ဂနွေ ည ၈ နာရီမှ ၉ နာရီခွဲ။
+    - သင်တန်းကြေး: ၂၀၀,၀၀၀ ကျပ် (Early Bird: ၁၅၀,၀၀၀ ကျပ်)။
+    - ဝန်ဆောင်မှုများ: AI Content Class, Social Media Design (150k), Chatbot Training (300k)။
+    - သင်ကြားမှု: Zoom Live + Telegram Lifetime Records။
     - နာမ်စား: 'ကျွန်တော်' ကိုသုံးပါ။ လူကြီးမင်းကို 'လူကြီးမင်း' ဟု သုံးပါ။
+    - Payment: Admin မှ ဖုန်းဆက်သွယ်ပြီးမှ ပေးသွင်းရပါမည်။
     """
 
     status_context = ""
     if ext_data.get('edit'):
-        status_context = "User က အချက်အလက်ပြင်ချင်နေတာပါ။ အချက်အလက်အသစ်ကို ယဉ်ကျေးစွာပြန်တောင်းပါ။"
+        status_context = "User က အချက်အလက်မှားလို့ ပြင်ချင်တာပါ။ နာမည် သို့မဟုတ် ဖုန်းနံပါတ်အသစ်ကို ယဉ်ကျေးစွာ ထပ်တောင်းပါ။"
     elif current['name'] != 'N/A' and current['phone'] != 'N/A':
-        status_context = f"ဒေတာရပြီးသားပါ။ (နာမည်: {current['name']}, ဖုန်း: {current['phone']})။ ထပ်မတောင်းပါနဲ့။ မေးခွန်းရှိလျှင် ဖြေပေးပါ။"
+        status_context = f"ဒေတာရပြီးသားဖြစ်သည် (နာမည်: {current['name']}, ဖုန်း: {current['phone']})။ ထပ်မတောင်းပါနဲ့။ လူကြီးမင်းအတွက် ဘာများကူညီပေးရမလဲဟုသာ မေးပါ။"
     else:
-        status_context = "နာမည် သို့မဟုတ် ဖုန်းနံပါတ် မပြည့်စုံသေးပါ။ ယဉ်ကျေးစွာ တောင်းခံပါ။"
+        status_context = "နာမည် သို့မဟုတ် ဖုန်းနံပါတ် မပြည့်စုံသေးပါ။ ယဉ်ကျေးစွာ တောင်းခံပေးပါ။"
 
     final_prompt = f"""
     {knowledge_base}
     
-    [CONTEXT]
+    [IMPORTANT CONTEXT]
     {status_context}
     
-    [USER MESSAGE]
+    [USER LATEST MESSAGE]
     {user_message}
     
-    တိုတိုနှင့် ရှင်းရှင်းလင်းလင်း မြန်မာလို ပြန်ဖြေပါ။
+    အထက်ပါအချက်များကို အခြေခံ၍ လူကြီးမင်း၏ မေးခွန်းကို တိုတိုနှင့် ရှင်းရှင်းလင်းလင်း မြန်မာလို ပြန်ဖြေပေးပါ။
     """
     
     try:
-        return model.generate_content(final_prompt).text
+        # History လုံးဝ မသုံးဘဲ လတ်တလောစာကိုပဲ ဖြေခိုင်းခြင်းဖြင့် Loop ပိတ်သည်
+        response = model.generate_content(final_prompt)
+        return response.text
     except:
         return "ခဏနေမှ ပြန်မေးပေးပါခင်ဗျာ။"
 
@@ -144,10 +145,10 @@ def webhook():
                         sid = event["sender"]["id"]
                         txt = event["message"]["text"]
                         
-                        # AI အဖြေကို တိုက်ရိုက်ယူမယ်
+                        # AI အဖြေကို Generate လုပ်သည်
                         reply = ask_gemini(sid, txt)
                         
-                        # Facebook ဆီ ပြန်ပို့မယ်
+                        # Facebook Messenger ဆီ တိုက်ရိုက်ပို့သည်
                         requests.post(f"https://graph.facebook.com/v12.0/me/messages?access_token={PAGE_ACCESS_TOKEN}", 
                                       json={"recipient": {"id": sid}, "message": {"text": reply}})
             return "OK", 200
