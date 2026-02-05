@@ -19,16 +19,18 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 PAGE_ACCESS_TOKEN = os.environ.get("PAGE_ACCESS_TOKEN")
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN")
 SERVICE_ACCOUNT_ENCODED = os.environ.get('SERVICE_ACCOUNT_JSON')
+MANYCHAT_API_KEY = os.environ.get("MANYCHAT_API_KEY")
 
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
+    # Stability အတွက် gemini-1.5-flash ကို အသုံးပြုထားပါသည်
     model = genai.GenerativeModel('gemini-flash-latest')
     user_sessions = {} 
 else:
     print("⚠️ CRITICAL: GOOGLE_API_KEY is missing!")
 
 # ==========================================
-# ၂။ GOOGLE SHEETS HANDLER
+# ၂။ GOOGLE SHEETS HANDLER (FORMULA FIX INCLUDED)
 # ==========================================
 def get_google_creds():
     try:
@@ -45,6 +47,7 @@ def get_google_creds():
         return None
 
 def save_to_sheet_async(sender_id, lead_data):
+    """Excel Formula Error မဖြစ်အောင် ဖုန်းနံပါတ်ရှေ့တွင် ' ခံ၍ သိမ်းပေးသော Logic"""
     try:
         creds = get_google_creds()
         if not creds: return
@@ -59,7 +62,12 @@ def save_to_sheet_async(sender_id, lead_data):
         name = lead_data.get('name', 'N/A')
         phone = lead_data.get('phone', 'N/A')
         service = lead_data.get('service', 'N/A')
-        
+
+        # [PRO FIX] ဖုန်းနံပါတ်ကို Text အဖြစ် သတ်မှတ်ရန် ရှေ့မှ ' ခံခြင်း
+        if phone != 'N/A' and phone != '':
+            if not str(phone).startswith("'"):
+                phone = f"'{phone}"
+
         if cell:
             row = cell.row
             if name != 'N/A' and name != '': sheet.update_cell(row, 2, name)
@@ -67,30 +75,29 @@ def save_to_sheet_async(sender_id, lead_data):
             if service != 'N/A' and service != '': sheet.update_cell(row, 4, service)
         else:
             sheet.append_row([str(sender_id), name, phone, service])
-        print(f"✅ Lead Processed for {sender_id}")
+        print(f"✅ Lead Processed & Fixed: {sender_id}")
     except Exception as e:
-        print(f"🔴 Sheet Error: {e}")
+        print(f"🔴 Sheet Save Error: {e}")
 
 # ==========================================
-# ၃။ CORE BOT LOGIC (GLOBAL PHONE SUPPORT)
+# ၃။ CORE BOT LOGIC (HUMAN-LIKE CONVERSATION)
 # ==========================================
 def ask_gemini(sender_id, user_message):
     
     knowledge_base = """
-    သင်သည် 'Work Smart with AI' ၏ Professional Admin (Male) ဖြစ်သည်။ နာမ်စားကို 'ကျွန်တော်' ဟု သုံးပါ။
-    လူကြီးမင်းအား အစဉ်အမြဲ ယဉ်ကျေးစွာ ဆက်ဆံပါ။ လူကဲ့သို့ သဘာဝကျကျ စကားပြောပါ။
+    သင်သည် 'Work Smart with AI' ၏ ကျွမ်းကျင်သော Sales Admin (အမျိုးသား) ဖြစ်သည်။ နာမ်စားကို 'ကျွန်တော်' ဟု သုံးပါ။
+    လူကြီးမင်းအား အမြဲတမ်း ယဉ်ကျေးစွာ ဆက်ဆံပါ။ စက်ရုပ်လို မဟုတ်ဘဲ လူကဲ့သို့ သဘာဝကျကျ စကားပြောပါ။
 
     [သင်ကြားပေးသော ဝန်ဆောင်မှု ၄ ခု]
-    1. AI Sales Content Creation: AI ဖြင့် အရောင်း Post ရေးနည်း။ ၁၅၀,၀၀၀ ကျပ် (Early Bird)။
-       - ရက် - ၂.၅.၂၀၂၆၊ စနေ၊ တနင်္ဂနွေ၊ 8:00 PM to 9:30 PM (Duration 1.5 months)။
+    1. AI Sales Content Creation: ၁၅၀,၀၀၀ ကျပ် (Early Bird)။ ၂.၅.၂၀၂၆ စမည်။ Sat & Sun (8:00 PM - 9:30 PM)။
     2. Auto Bot Service: Page/Telegram အတွက် Bot တည်ဆောက်ပေးခြင်း။
     3. Social Media Design Class: Canva/AI ဖြင့် ပုံထုတ်နည်း။ ၁၅၀,၀၀၀ ကျပ်။
     4. Chat Bot Training: Chatbot တည်ဆောက်နည်း သင်တန်း။ ၃၀၀,၀၀၀ ကျပ်။
 
-    [လုပ်ဆောင်ရမည့် ပန်းတိုင်များ]
-    - User ၏ မေးခွန်းကို KB မှ အခြေခံ၍ သဘာဝကျကျ ဖြေကြားပါ။
-    - ဒေတာကောက်ယူရာတွင် နိုင်ငံတကာ ဖုန်းနံပါတ်များကိုလည်း လက်ခံပါ။ (ဥပမာ +65, +66, +1 စသည်ဖြင့်)
-    - စာပြန်သည့်အခါတိုင်း Message ၏ အဆုံးတွင် <data>{"name": "...", "phone": "...", "service": "..."}</data> tag ကို အမြဲထည့်ပါ။ (မရှိလျှင် "N/A" ဟု ထည့်ပါ)
+    [ပန်းတိုင်နှင့် စည်းကမ်း]
+    - User ၏ မေးခွန်းကို KB မှ အခြေခံ၍ လူကဲ့သို့ သဘာဝကျကျ အရင်ဖြေပါ။
+    - စာပြန်သည့်အခါတိုင်း Message ၏ အဆုံးတွင် User ဆီမှရသော Name, Phone, Service ကို <data>{"name": "...", "phone": "...", "service": "..."}</data> tag တွင် JSON ဖြင့် ထည့်ပါ။
+    - နိုင်ငံတကာ ဖုန်းနံပါတ်များကိုလည်း လက်ခံပါ။ (ဥပမာ +65, +66)
     - ဒေတာရပြီးပါက ထပ်မတောင်းပါနှင့်။ Admin မှ ဖုန်းဆက်မည်ဖြစ်ကြောင်း ပြောပါ။
     """
 
@@ -110,12 +117,11 @@ def ask_gemini(sender_id, user_message):
 
         if data_match:
             try:
-                # ဒေတာသိမ်းရန် သီးသန့် Thread ခွဲထုတ်ခြင်း
                 lead_data = json.loads(data_match.group(1))
                 if any(v != 'N/A' for v in lead_data.values()):
+                    # ဒေတာသိမ်းရန် Thread ခွဲထုတ်ခြင်း (Response မြန်စေရန်)
                     Thread(target=save_to_sheet_async, args=(sender_id, lead_data)).start()
-            except:
-                pass
+            except: pass
 
         return clean_reply
         
@@ -156,10 +162,8 @@ def fb_webhook():
 def send_facebook_message(recipient_id, text):
     url = f"https://graph.facebook.com/v12.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
     payload = {"recipient": {"id": recipient_id}, "message": {"text": text}}
-    try:
-        requests.post(url, json=payload)
-    except:
-        pass
+    try: requests.post(url, json=payload)
+    except: pass
 
 if __name__ == '__main__':
     app.run(debug=True, port=os.getenv("PORT", default=5000))
