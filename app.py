@@ -22,8 +22,6 @@ SERVICE_ACCOUNT_ENCODED = os.environ.get('SERVICE_ACCOUNT_JSON')
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
     model = genai.GenerativeModel('gemini-flash-latest')
-else:
-    print("⚠️ CRITICAL: GOOGLE_API_KEY is missing!")
 
 # ==========================================
 # ၂။ GOOGLE SHEETS FUNCTIONS
@@ -34,14 +32,11 @@ def get_google_creds():
         creds_json = json.loads(base64.b64decode(SERVICE_ACCOUNT_ENCODED).decode("utf-8"))
         scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         return Credentials.from_service_account_info(creds_json, scopes=scope)
-    except Exception as e:
-        print(f"🔴 Creds Error: {e}")
-        return None
+    except: return None
 
 def fetch_data(sender_id):
     try:
         creds = get_google_creds()
-        if not creds: return {"name": "N/A", "phone": "N/A"}
         client = gspread.authorize(creds)
         sheet = client.open("WorkSmart_Leads").sheet1
         cell = sheet.find(str(sender_id), in_column=1)
@@ -54,7 +49,6 @@ def fetch_data(sender_id):
 def save_data(sender_id, name, phone):
     try:
         creds = get_google_creds()
-        if not creds: return
         client = gspread.authorize(creds)
         sheet = client.open("WorkSmart_Leads").sheet1
         try:
@@ -66,11 +60,10 @@ def save_data(sender_id, name, phone):
             if phone != 'N/A': sheet.update_cell(cell.row, 3, phone)
         else:
             sheet.append_row([str(sender_id), name, phone, "N/A"])
-    except Exception as e:
-        print(f"🔴 Sheet Save Error: {e}")
+    except: pass
 
 # ==========================================
-# ၃။ CORE BOT PROCESS (THE FIX: RUNS ASYNC)
+# ၃။ CORE BOT PROCESS (FULL KNOWLEDGE BASE)
 # ==========================================
 def handle_bot_process(sid, txt):
     # (က) Data Extraction - JSON syntax fix {{ }}
@@ -82,37 +75,43 @@ def handle_bot_process(sid, txt):
             ext_data = json.loads(json_match.group(0))
             if ext_data.get('name') != 'N/A' or ext_data.get('phone') != 'N/A':
                 save_data(sid, ext_data.get('name', 'N/A'), ext_data.get('phone', 'N/A'))
-    except Exception as e:
-        print(f"🔴 AI Extract Error: {e}")
+    except: pass
 
     # (ခ) Full Knowledge Base
     current = fetch_data(sid)
+    
     kb = """
     သင်ဟာ 'Work Smart with AI' ရဲ့ Professional Sales Admin (ကျွန်တော်) ဖြစ်ပါတယ်။
-    [KNOWLEDGE BASE]
+    
+    [ဗဟုသုတဘဏ် - Knowledge Base]
     - AI Sales Content Class: စမည့်ရက် မေလ ၂ ရက် (၂.၅.၂၀၂၆)၊ စနေ၊ တနင်္ဂနွေ ည ၈ နာရီမှ ၉ နာရီခွဲ။
-    - သင်တန်းကြေး: ၂၀၀,၀၀၀ ကျပ် (Early Bird: ၁၅၀,၀၀၀ ကျပ်)။
-    - ဝန်ဆောင်မှုများ: AI Sales Content Creation (150k), Social Media Design (150k), Chatbot Training (300k), Auto Bot Service.
-    - Platform: Zoom Live + Telegram Lifetime record access.
-    - နာမ်စား: 'လူကြီးမင်း' ဟုသုံးပြီး မိမိကိုယ်ကို 'ကျွန်တော်' ဟု သုံးပါ။
+    - သင်တန်းကြေး: ၂၀၀,၀၀၀ ကျပ် (Early Bird Discount: ၁၅၀,၀၀၀ ကျပ်)။
+    - ဝန်ဆောင်မှုများ: 
+        1. AI Sales Content Creation (150k)
+        2. Social Media Design Class (150k)
+        3. Chatbot Training (300k)
+        4. Auto Bot Service (Custom Price)
+    - သင်ကြားမှု: Zoom Live Learning + Telegram Lifetime record access.
+    - Certificate: သင်တန်းဆင်းလက်မှတ် (Digital) ပေးအပ်ပါတယ်။
+    - နာမ်စား: လူကြီးမင်းကို 'လူကြီးမင်း' ဟုသုံးပြီး မိမိကိုယ်ကို 'ကျွန်တော်' ဟု သုံးပါ။
     """
     
     status_context = "ဒေတာမပြည့်စုံသေးပါ။ နာမည်နှင့် ဖုန်းနံပါတ်ကို ယဉ်ကျေးစွာတောင်းပါ။"
-    if current['name'] != 'N/A' and current['phone'] != 'N/A':
+    if "ပြင်" in txt or "wrong" in txt.lower():
+        status_context = "User က ဒေတာပြင်ချင်နေတာပါ။ အချက်အလက်အသစ်ကို ယဉ်ကျေးစွာ ပြန်တောင်းပေးပါ။"
+    elif current['name'] != 'N/A' and current['phone'] != 'N/A':
         status_context = f"ဒေတာရပြီးသား (နာမည်: {current['name']}, ဖုန်း: {current['phone']}) ဖြစ်သည်။ ဒေတာထပ်မတောင်းပါနှင့်။ မေးခွန်းရှိလျှင် KB ထဲမှ ဖြေကြားပါ။"
 
     # (ဂ) Response Generation
     final_prompt = f"{kb}\n\nContext: {status_context}\n\nUser Message: {txt}\n\nယဉ်ကျေးစွာ မြန်မာလို ပြန်ဖြေပါ:"
     try:
         reply = model.generate_content(final_prompt).text
-        # Facebook ဆီသို့ စာပြန်ပို့ခြင်း
         requests.post(f"https://graph.facebook.com/v12.0/me/messages?access_token={PAGE_ACCESS_TOKEN}", 
                       json={"recipient": {"id": sid}, "message": {"text": reply}})
-    except Exception as e:
-        print(f"🔴 AI Response Error: {e}")
+    except: pass
 
 # ==========================================
-# ၄။ WEBHOOK ROUTE (LOOP KILLER SYSTEM)
+# ၄။ WEBHOOK (LOOP KILLER)
 # ==========================================
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
@@ -130,8 +129,7 @@ def webhook():
                         sid = event["sender"]["id"]
                         txt = event["message"]["text"]
                         
-                        # [CRITICAL FIX] Facebook Timeout မဖြစ်အောင် Thread သုံးပြီး အလုပ်လုပ်ခိုင်းခြင်း
-                        # Facebook ကို ချက်ချင်း 'EVENT_RECEIVED' (200 OK) ပြန်ပို့ပေးပါမည်
+                        # Thread သုံးပြီး Facebook timeout ကို ကာကွယ်သည်
                         Thread(target=handle_bot_process, args=(sid, txt)).start()
             
             return "EVENT_RECEIVED", 200
