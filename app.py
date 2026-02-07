@@ -155,6 +155,7 @@ def ask_gemini(sender_id, user_message):
     [Important]
     - နိုင်ငံတကာ ဖုန်းနံပါတ်များကိုလည်း လက်ခံပါ။ (ဥပမာ +65, +66)
     - User က စာပြန်လာပါက Follow-up လုပ်စရာမလိုတော့ကြောင်း System မှ သိရှိပါမည်။
+    - User ရဲ့ စိတ်ဝင်စားတဲ့ Service တွေကို စာရင်းသွင်းပြီးရင် Google Sheet ထဲမှာ တိုက်စစ်ပြီး User ကို ပြန်ပြပြီး Comfirm ရယူပါ။​ 
     """
 
     if sender_id not in user_sessions:
