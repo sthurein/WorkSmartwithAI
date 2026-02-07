@@ -6,6 +6,7 @@ import requests
 import re
 import base64
 import datetime
+from datetime import timedelta
 from threading import Thread
 from flask import Flask, request, jsonify
 import google.generativeai as genai
@@ -20,18 +21,20 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 PAGE_ACCESS_TOKEN = os.environ.get("PAGE_ACCESS_TOKEN")
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN")
 SERVICE_ACCOUNT_ENCODED = os.environ.get('SERVICE_ACCOUNT_JSON')
-MANYCHAT_API_KEY = os.environ.get("MANYCHAT_API_KEY")
+
+# Admin ဝင်ဖြေရင် Bot ခေတ္တရပ်မည့်ကြာချိန် (စက္ကန့်) - ၃၀၀ စက္ကန့် (၅ မိနစ်)
+PAUSE_DURATION = 300 
+paused_users = {} # ဘယ် User တွေကို ခဏရပ်ထားလဲ မှတ်သားမည့် နေရာ
 
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
-    # Stability အတွက် Flash model ကို သုံးထားပါသည်
-    model = genai.GenerativeModel('gemini-flash-latest')
+    model = genai.GenerativeModel('gemini-1.5-flash')
     user_sessions = {} 
 else:
     print("⚠️ CRITICAL: GOOGLE_API_KEY is missing!")
 
 # ==========================================
-# ၂။ GOOGLE SHEETS HANDLER (UPDATED LOGIC)
+# ၂။ GOOGLE SHEETS HANDLER (SERVICE APPEND LOGIC)
 # ==========================================
 def get_google_creds():
     try:
@@ -49,9 +52,8 @@ def get_google_creds():
 
 def save_to_sheet_async(sender_id, lead_data):
     """
-    Sales Expert Logic အသစ်:
-    1. Status, Last Contacted, Follow-up Count, Stop Follow-up တို့ကို Update လုပ်မည်။
-    2. Customer စာပြန်လာပါက Follow-up Count ကို '0' သို့ Reset ချမည်။
+    Column Mapping based on CSV:
+    1:ID, 2:Name, 3:Phone, 4:Service, 5:Status, 6:Last Contacted, 7:Follow Up Count, 8:Stop Follow Up
     """
     try:
         creds = get_google_creds()
@@ -67,14 +69,13 @@ def save_to_sheet_async(sender_id, lead_data):
         # Data Extraction
         name = lead_data.get('name', 'N/A')
         phone = lead_data.get('phone', 'N/A')
-        service = lead_data.get('service', 'N/A')
+        new_service = lead_data.get('service', 'N/A') # Service အသစ်
         status = lead_data.get('status', 'N/A')
         stop_followup = lead_data.get('stop_followup', False)
 
-        # Time Stamp (Current Time)
         current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # [PRO FIX] Phone Formatting (Prevent Excel Error)
+        # Phone Formatting
         if phone != 'N/A' and phone != '':
             if not str(phone).startswith("'"):
                 phone = f"'{phone}"
@@ -83,47 +84,50 @@ def save_to_sheet_async(sender_id, lead_data):
             # === Existing User (Update) ===
             row = cell.row
             
-            # Basic Info Update
             if name != 'N/A' and name != '': sheet.update_cell(row, 2, name)
             if phone != 'N/A' and phone != '': sheet.update_cell(row, 3, phone)
-            if service != 'N/A' and service != '': sheet.update_cell(row, 4, service)
+
+            # --- [LOGIC UPDATE] Service Append ---
+            if new_service != 'N/A' and new_service != '':
+                current_services = sheet.cell(row, 4).value # Column 4 ကိုဖတ်မယ်
+                
+                if current_services:
+                    # အရင် Service တွေရှိပြီးသားဆိုရင်၊ အသစ်က ပါပြီးသားလား စစ်မယ်
+                    if new_service not in current_services:
+                        # မပါသေးရင် ကော်မာခံပြီး ဆက်ပေါင်းမယ်
+                        updated_service = f"{current_services}, {new_service}"
+                        sheet.update_cell(row, 4, updated_service)
+                else:
+                    # ဘာမှ မရှိသေးရင် အသစ်ထည့်မယ်
+                    sheet.update_cell(row, 4, new_service)
             
-            # --- New Logic Updates ---
-            
-            # 1. Lead Status Update
             if status != 'N/A': sheet.update_cell(row, 5, status)
+            sheet.update_cell(row, 6, current_time) # Last Contacted
+            sheet.update_cell(row, 7, 0) # Reset Follow-up Count
             
-            # 2. Last Contacted (Always Update when user replies)
-            sheet.update_cell(row, 6, current_time)
-            
-            # 3. Follow-up Count Reset (Customer Active ဖြစ်သွားလို့ 0 ပြန်ထားမယ်)
-            sheet.update_cell(row, 7, 0) 
-            
-            # 4. Stop Follow-up Checkbox
             if stop_followup:
-                sheet.update_cell(row, 8, True) # CheckBox True
-                sheet.update_cell(row, 5, "Not Interested") # Force Status
+                sheet.update_cell(row, 8, True)
+                sheet.update_cell(row, 5, "Not Interested") 
 
         else:
             # === New User (Insert) ===
-            # Order: ID, Name, Phone, Service, Status, LastContact, Count(0), Stop(False)
             sheet.append_row([
                 str(sender_id), 
                 name, 
                 phone, 
-                service, 
+                new_service, 
                 status if status != 'N/A' else "New",
                 current_time,
-                0,     # Initial Follow-up Count is 0
-                False  # Stop Follow-up is False
+                0,     # Count
+                False  # Stop
             ])
             
-        print(f"✅ Lead Updated: {sender_id} | Count Reset to 0")
+        print(f"✅ Lead Updated: {sender_id}")
     except Exception as e:
         print(f"🔴 Sheet Save Error: {e}")
 
 # ==========================================
-# ၃။ CORE BOT LOGIC (SALES EXPERT PERSONALITY)
+# ၃။ CORE BOT LOGIC
 # ==========================================
 def ask_gemini(sender_id, user_message):
     
@@ -133,7 +137,6 @@ def ask_gemini(sender_id, user_message):
     [Role & Personality]
     - သင်သည် ရောင်းရန်သီးသန့် ကြိုးစားသူမဟုတ်၊ Customer ၏ အခက်အခဲကို ကူညီဖြေရှင်းပေးသူ (Consultant) ဖြစ်သည်။
     - လေသံကို နွေးထွေးပါ၊ ယုံကြည်မှုရှိပါ၊ သဘာဝကျပါစေ။
-    - "ဝယ်ပါ" ဟု တိုက်ရိုက်ပြောမည့်အစား "ဒီနည်းပညာက လူကြီးမင်းလုပ်ငန်းကို ဘယ်လိုကူညီနိုင်လဲ" ဆိုတာကို အသားပေးပြောပါ။
 
     [Sales Logic Constraints]
     1. **Interest Check:** User ၏ စကားကို သုံးသပ်ပါ။ 
@@ -148,14 +151,13 @@ def ask_gemini(sender_id, user_message):
     1. AI Sales Content Creation: ၁၅၀,၀၀၀ ကျပ် (Early Bird)။ ၂.၅.၂၀၂၆ စမည်။ Sat & Sun (8:00 PM - 9:30 PM)။ သင်တန်းကာလ ၆ ပတ်။ 
     2. Auto Bot Service: Page/Telegram အတွက် Bot တည်ဆောက်ပေးခြင်း။
     3. Social Media Design Class: Canva/AI ဖြင့် ပုံထုတ်နည်း။ ၁၅၀,၀၀၀ ကျပ်။
-    4. 7/24 Auto Sale Chat AI Agent Training: 7/24 ဈေးရောင်းပေးနိုင်သည့်  AI Agent တည်ဆောက်နည်း သင်တန်း။ ၈၀၀,၀၀၀ ကျပ်။ 
+    4. 7/24 Auto Sale Chat AI Agent Training: 7/24 ဈေးရောင်းပေးနိုင်သည့်  AI Agent တည်ဆောက်နည်း သင်တန်း။ ၈၀၀,၀၀၀ ကျပ်။ 
     5. Digital Certificate ပေးမည်။
-    6. Zoom ဖြင့်သင်ကြားမယ်။ Discussion နဲ့ Video record အတွက် Telegram Chanel ပါဝင်မယ်။ 
+    6. Zoom ဖြင့်သင်ကြားမယ်။ Discussion နဲ့ Video record အတွက် Telegram Chanel ပါဝင်မယ်။ 
     
     [Important]
     - နိုင်ငံတကာ ဖုန်းနံပါတ်များကိုလည်း လက်ခံပါ။ (ဥပမာ +65, +66)
-    - User က စာပြန်လာပါက Follow-up လုပ်စရာမလိုတော့ကြောင်း System မှ သိရှိပါမည်။
-    - User ရဲ့ စိတ်ဝင်စားတဲ့ Service တွေကို စာရင်းသွင်းပြီးရင် Google Sheet ထဲမှာ တိုက်စစ်ပြီး User ကို ပြန်ပြပြီး Comfirm ရယူပါ။​ 
+    - User ရဲ့ စိတ်ဝင်စားတဲ့ Service တွေကို စာရင်းသွင်းပြီးရင် Google Sheet ထဲမှာ တိုက်စစ်ပြီး User ကို ပြန်ပြပြီး Comfirm ရယူပါ။ 
     """
 
     if sender_id not in user_sessions:
@@ -168,14 +170,13 @@ def ask_gemini(sender_id, user_message):
         response_obj = chat.send_message(user_message)
         full_text = response_obj.text
 
-        # <data> tag အတွင်းမှ JSON ကို ထုတ်ယူခြင်း
+        # <data> tag Processing
         data_match = re.search(r'<data>(.*?)</data>', full_text, re.DOTALL)
         clean_reply = re.sub(r'<data>.*?</data>', '', full_text, flags=re.DOTALL).strip()
 
         if data_match:
             try:
                 lead_data = json.loads(data_match.group(1))
-                # Data Save ရန် Thread ခွဲထုတ်ခြင်း (Response မြန်စေရန်)
                 Thread(target=save_to_sheet_async, args=(sender_id, lead_data)).start()
             except Exception as e:
                 print(f"JSON Parse Error: {e}")
@@ -187,27 +188,15 @@ def ask_gemini(sender_id, user_message):
         return "ခဏလေးနော်၊ လူကြီးမင်း။ စနစ်က ခဏလေး ကြန့်ကြာနေလို့ပါ။"
 
 # ==========================================
-# ၄။ ROUTES
+# ၄။ WEBHOOK & PAUSE LOGIC
 # ==========================================
 @app.route('/')
 def home():
     return "Work Smart AI Bot is Running!", 200
 
-# UptimeRobot အတွက် Ping Route
 @app.route('/ping')
 def ping():
     return "Pong", 200
-
-@app.route('/manychat', methods=['POST'])
-def manychat_hook():
-    try:
-        data = request.json
-        user_id = str(data.get('user_id'))
-        message = data.get('message')
-        bot_reply = ask_gemini(user_id, message)
-        return jsonify({"response": bot_reply}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 @app.route('/webhook', methods=['GET', 'POST'])
 def fb_webhook():
@@ -222,11 +211,38 @@ def fb_webhook():
             if body.get("object") == "page":
                 for entry in body.get("entry", []):
                     for event in entry.get("messaging", []):
-                        if "message" in event and "text" in event["message"] and not event["message"].get("is_echo"):
+                        
+                        # --- [LOGIC 1] ADMIN REPLY DETECTION ---
+                        # "is_echo": True ဆိုရင် Admin ဘက်က ပို့လိုက်တဲ့စာ
+                        if event.get("message", {}).get("is_echo"):
+                            recipient_id = event["recipient"]["id"] # Customer ID
+                            
+                            # နောက်ထပ် ၅ မိနစ် (PAUSE_DURATION) အထိ Bot ကို Pause မယ်
+                            unpause_time = datetime.datetime.now() + timedelta(seconds=PAUSE_DURATION)
+                            paused_users[recipient_id] = unpause_time
+                            
+                            print(f"⏸️ Admin replied to {recipient_id}. Bot paused until {unpause_time}")
+                            continue 
+
+                        # --- [LOGIC 2] USER MESSAGE HANDLING ---
+                        if "message" in event and "text" in event["message"]:
                             sid = event["sender"]["id"]
                             msg = event["message"]["text"]
+
+                            # Check Pause Status
+                            if sid in paused_users:
+                                if datetime.datetime.now() < paused_users[sid]:
+                                    print(f"💤 Bot is sleeping for {sid} (Admin is talking)")
+                                    continue # Pause မပြည့်သေးရင် ဘာမှမလုပ်ဘူး
+                                else:
+                                    # အချိန်ပြည့်သွားရင် List ထဲက ပြန်ဖျက်ပြီး Bot အလုပ်ပြန်လုပ်မယ်
+                                    del paused_users[sid]
+                                    print(f"▶️ Bot resumed for {sid}")
+
+                            # Process with Gemini
                             reply = ask_gemini(sid, msg)
                             send_facebook_message(sid, reply)
+                            
             return "OK", 200
         except Exception as e:
             print(f"Webhook Error: {e}")
