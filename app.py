@@ -20,18 +20,17 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 PAGE_ACCESS_TOKEN = os.environ.get("PAGE_ACCESS_TOKEN")
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN")
 SERVICE_ACCOUNT_ENCODED = os.environ.get('SERVICE_ACCOUNT_JSON')
-MANYCHAT_API_KEY = os.environ.get("MANYCHAT_API_KEY")
+MANYCHAT_API_KEY = os.environ.get("MANYCHAT_API_KEY") # Render Env Var မှာ ထည့်ဖို့မမေ့ပါနဲ့
 
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
-    # Stability အတွက် Flash model ကို သုံးထားပါသည်
-    model = genai.GenerativeModel('gemini-flash-latest')
+    model = genai.GenerativeModel('gemini-1.5-flash')
     user_sessions = {} 
 else:
     print("⚠️ CRITICAL: GOOGLE_API_KEY is missing!")
 
 # ==========================================
-# ၂။ GOOGLE SHEETS HANDLER (UPDATED LOGIC)
+# ၂။ GOOGLE SHEETS HANDLER
 # ==========================================
 def get_google_creds():
     try:
@@ -48,11 +47,6 @@ def get_google_creds():
         return None
 
 def save_to_sheet_async(sender_id, lead_data):
-    """
-    Sales Expert Logic အသစ်:
-    1. Status, Last Contacted, Follow-up Count, Stop Follow-up တို့ကို Update လုပ်မည်။
-    2. Customer စာပြန်လာပါက Follow-up Count ကို '0' သို့ Reset ချမည်။
-    """
     try:
         creds = get_google_creds()
         if not creds: return
@@ -61,72 +55,61 @@ def save_to_sheet_async(sender_id, lead_data):
         
         try:
             cell = sheet.find(str(sender_id), in_column=1)
-        except gspread.exceptions.CellNotFound:
-            cell = None
+        except: cell = None
 
-        # Data Extraction
         name = lead_data.get('name', 'N/A')
         phone = lead_data.get('phone', 'N/A')
         service = lead_data.get('service', 'N/A')
         status = lead_data.get('status', 'N/A')
         stop_followup = lead_data.get('stop_followup', False)
-
-        # Time Stamp (Current Time)
         current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # [PRO FIX] Phone Formatting (Prevent Excel Error)
+        # Phone Formatting Fix (Excel Error မတက်အောင်)
         if phone != 'N/A' and phone != '':
             if not str(phone).startswith("'"):
                 phone = f"'{phone}"
 
         if cell:
-            # === Existing User (Update) ===
             row = cell.row
-            
-            # Basic Info Update
-            if name != 'N/A' and name != '': sheet.update_cell(row, 2, name)
-            if phone != 'N/A' and phone != '': sheet.update_cell(row, 3, phone)
-            if service != 'N/A' and service != '': sheet.update_cell(row, 4, service)
-            
-            # --- New Logic Updates ---
-            
-            # 1. Lead Status Update
+            if name != 'N/A': sheet.update_cell(row, 2, name)
+            if phone != 'N/A': sheet.update_cell(row, 3, phone)
+            if service != 'N/A': sheet.update_cell(row, 4, service)
             if status != 'N/A': sheet.update_cell(row, 5, status)
-            
-            # 2. Last Contacted (Always Update when user replies)
             sheet.update_cell(row, 6, current_time)
-            
-            # 3. Follow-up Count Reset (Customer Active ဖြစ်သွားလို့ 0 ပြန်ထားမယ်)
-            sheet.update_cell(row, 7, 0) 
-            
-            # 4. Stop Follow-up Checkbox
+            sheet.update_cell(row, 7, 0) # Customer ပြန်ဆက်သွယ်ရင် Count Reset
             if stop_followup:
-                sheet.update_cell(row, 8, True) # CheckBox True
-                sheet.update_cell(row, 5, "Not Interested") # Force Status
-
+                sheet.update_cell(row, 8, True)
+                sheet.update_cell(row, 5, "Not Interested")
         else:
-            # === New User (Insert) ===
-            # Order: ID, Name, Phone, Service, Status, LastContact, Count(0), Stop(False)
-            sheet.append_row([
-                str(sender_id), 
-                name, 
-                phone, 
-                service, 
-                status if status != 'N/A' else "New",
-                current_time,
-                0,     # Initial Follow-up Count is 0
-                False  # Stop Follow-up is False
-            ])
+            sheet.append_row([str(sender_id), name, phone, service, status if status != 'N/A' else "New", current_time, 0, False])
             
-        print(f"✅ Lead Updated: {sender_id} | Count Reset to 0")
     except Exception as e:
-        print(f"🔴 Sheet Save Error: {e}")
+        print(f"🔴 Sheet Error: {e}")
 
 # ==========================================
-# ၃။ CORE BOT LOGIC (SALES EXPERT PERSONALITY)
+# ၃။ SEND TO MANYCHAT (ASYNC REPLY)
 # ==========================================
-def ask_gemini(sender_id, user_message):
-    
+def send_to_manychat(user_id, text):
+    # Loop မဖြစ်စေရန် ဒီ Function က အရေးကြီးဆုံးဖြစ်သည်
+    if not MANYCHAT_API_KEY: 
+        print("🔴 MANYCHAT_API_KEY Missing")
+        return
+    url = "https://api.manychat.com/fb/sending/sendContent"
+    headers = {"Authorization": f"Bearer {MANYCHAT_API_KEY}", "Content-Type": "application/json"}
+    payload = {
+        "subscriber_id": user_id,
+        "data": {"version": "v2", "content": {"messages": [{"type": "text", "text": text}]}}
+    }
+    try:
+        requests.post(url, json=payload, headers=headers)
+    except Exception as e:
+        print(f"🔴 ManyChat Send Error: {e}")
+
+# ==========================================
+# ၄။ CORE PROCESSING (BACKGROUND TASK)
+# ==========================================
+def process_ai_response(sender_id, user_message):
+    # Boss လိုချင်တဲ့ Knowledge Base အပြည့်အစုံ
     knowledge_base = """
     သင်သည် 'Work Smart with AI' ၏ ကျွမ်းကျင်သော Sales Expert (အမျိုးသား) ဖြစ်သည်။ 
     
@@ -143,59 +126,59 @@ def ask_gemini(sender_id, user_message):
     3. **Data Tagging:** - အောက်ပါ JSON format ကို အမြဲတမ်း <data> tag ထဲတွင် ထည့်ပေးပါ။
        - <data>{"name": "...", "phone": "...", "service": "...", "status": "...", "stop_followup": boolean}</data>
        - status values: "New", "Interested", "Not Interested", "Closed"
-    
+    4. **International Phone:** နိုင်ငံတကာ ဖုန်းနံပါတ်များကိုလည်း လက်ခံပါ။ (ဥပမာ +65, +66)
+
     [Product Info - Knowledge Base]
-    1. AI Sales Content Creation: ၁၅၀,၀၀၀ ကျပ် (Early Bird)။ ၂.၅.၂၀၂၆ စမည်။ Sat & Sun (8:00 PM - 9:30 PM)။ သင်တန်းကာလ ၆ ပတ်။ 
-    2. Auto Bot Service: Page/Telegram အတွက် Bot တည်ဆောက်ပေးခြင်း။
-    3. Social Media Design Class: Canva/AI ဖြင့် ပုံထုတ်နည်း။ ၁၅၀,၀၀၀ ကျပ်။
-    4. 7/24 Auto Sale Chat AI Agent Training: 7/24 ဈေးရောင်းပေးနိုင်သည့်  AI Agent တည်ဆောက်နည်း သင်တန်း။ ၈၀၀,၀၀၀ ကျပ်။ 
-    5. Digital Certificate ပေးမည်။
-    6. Zoom ဖြင့်သင်ကြားမယ်။ Discussion နဲ့ Video record အတွက် Telegram Chanel ပါဝင်မယ်။ 
+    1. **AI Sales Content Creation:** - ဈေးနှုန်း: ၁၅၀,၀၀၀ ကျပ် (Early Bird)။ 
+       - ရက်စွဲ: ၂.၅.၂၀၂၆ စမည်။ 
+       - အချိန်: Sat & Sun (8:00 PM - 9:30 PM)။ 
+       - ကြာချိန်: ၆ ပတ်။
     
-    [Important]
-    - နိုင်ငံတကာ ဖုန်းနံပါတ်များကိုလည်း လက်ခံပါ။ (ဥပမာ +65, +66)
-    - User က စာပြန်လာပါက Follow-up လုပ်စရာမလိုတော့ကြောင်း System မှ သိရှိပါမည်။
+    2. **Auto Bot Service:** - Facebook Page/Telegram အတွက် Bot တည်ဆောက်ပေးခြင်း။
+    
+    3. **Social Media Design Class:** - Canva/AI ဖြင့် ပုံထုတ်နည်း။ 
+       - ဈေးနှုန်း: ၁၅၀,၀၀၀ ကျပ်။
+    
+    4. **7/24 Auto Sale Chat AI Agent Training:** - 7/24 ဈေးရောင်းပေးနိုင်သည့် AI Agent တည်ဆောက်နည်း သင်တန်း။ 
+       - ဈေးနှုန်း: ၈၀၀,၀၀၀ ကျပ်။
+    
+    [Additional Benefits]
+    - Digital Certificate ပေးမည်။
+    - Zoom ဖြင့်သင်ကြားမယ်။ Discussion နဲ့ Video record အတွက် Telegram Channel ပါဝင်မယ်။
     """
 
     if sender_id not in user_sessions:
         user_sessions[sender_id] = model.start_chat(history=[])
         user_sessions[sender_id].send_message(knowledge_base)
 
-    chat = user_sessions[sender_id]
-
     try:
-        response_obj = chat.send_message(user_message)
-        full_text = response_obj.text
-
-        # <data> tag အတွင်းမှ JSON ကို ထုတ်ယူခြင်း
-        data_match = re.search(r'<data>(.*?)</data>', full_text, re.DOTALL)
-        clean_reply = re.sub(r'<data>.*?</data>', '', full_text, flags=re.DOTALL).strip()
+        # AI ဖြေတာ ကြာရင်လည်း ManyChat Timeout မဖြစ်တော့ပါ (Background မှာလုပ်လို့)
+        response = user_sessions[sender_id].send_message(user_message).text
+        
+        data_match = re.search(r'<data>(.*?)</data>', response, re.DOTALL)
+        clean_reply = re.sub(r'<data>.*?</data>', '', response, flags=re.DOTALL).strip()
 
         if data_match:
             try:
                 lead_data = json.loads(data_match.group(1))
-                # Data Save ရန် Thread ခွဲထုတ်ခြင်း (Response မြန်စေရန်)
-                Thread(target=save_to_sheet_async, args=(sender_id, lead_data)).start()
-            except Exception as e:
-                print(f"JSON Parse Error: {e}")
-
-        return clean_reply
+                save_to_sheet_async(sender_id, lead_data)
+            except: pass
         
+        # AI ပြီးမှ ManyChat API ကိုလှမ်းခေါ်ပြီး စာပြန်ပို့မယ်
+        send_to_manychat(sender_id, clean_reply)
+
     except Exception as e:
-        print(f"🔴 Gemini Error: {e}")
-        return "ခဏလေးနော်၊ လူကြီးမင်း။ စနစ်က ခဏလေး ကြန့်ကြာနေလို့ပါ။"
+        print(f"AI Error: {e}")
+        send_to_manychat(sender_id, "စနစ်ပိုင်းဆိုင်ရာ အနည်းငယ် ကြန့်ကြာနေပါသဖြင့် ခဏစောင့်ပေးပါခင်ဗျာ။")
 
 # ==========================================
-# ၄။ ROUTES
+# ၅။ ROUTES
 # ==========================================
 @app.route('/')
-def home():
-    return "Work Smart AI Bot is Running!", 200
+def home(): return "Work Smart AI Bot is Running!", 200
 
-# UptimeRobot အတွက် Ping Route
 @app.route('/ping')
-def ping():
-    return "Pong", 200
+def ping(): return "Pong", 200
 
 @app.route('/manychat', methods=['POST'])
 def manychat_hook():
@@ -203,10 +186,16 @@ def manychat_hook():
         data = request.json
         user_id = str(data.get('user_id'))
         message = data.get('message')
-        bot_reply = ask_gemini(user_id, message)
-        return jsonify({"response": bot_reply}), 200
+        
+        if user_id and message:
+            # 🚨 ချက်ချင်း 200 OK ပြန်ပေးလိုက်မယ် (ဒါက Loop မဖြစ်အောင် ကာကွယ်ပေးတဲ့အပိုင်း)
+            # ပြီးမှ Thread နဲ့ AI ကို အလုပ်လုပ်ခိုင်းမယ်
+            Thread(target=process_ai_response, args=(user_id, message)).start()
+            return jsonify({"status": "processing"}), 200
+            
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    return jsonify({"error": "No data"}), 400
 
 @app.route('/webhook', methods=['GET', 'POST'])
 def fb_webhook():
@@ -224,18 +213,9 @@ def fb_webhook():
                         if "message" in event and "text" in event["message"] and not event["message"].get("is_echo"):
                             sid = event["sender"]["id"]
                             msg = event["message"]["text"]
-                            reply = ask_gemini(sid, msg)
-                            send_facebook_message(sid, reply)
+                            Thread(target=process_ai_response, args=(sid, msg)).start() 
             return "OK", 200
-        except Exception as e:
-            print(f"Webhook Error: {e}")
-            return "Error", 500
-
-def send_facebook_message(recipient_id, text):
-    url = f"https://graph.facebook.com/v12.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
-    payload = {"recipient": {"id": recipient_id}, "message": {"text": text}}
-    try: requests.post(url, json=payload)
-    except: pass
+        except: return "Error", 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=os.getenv("PORT", default=5000))
