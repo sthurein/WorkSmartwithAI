@@ -1,6 +1,6 @@
-Flask
+google-genai 
+flask
 requests
-google-generativeai
 gspread
-oauth2client
+google-oauth2-service-account
 gunicorn
