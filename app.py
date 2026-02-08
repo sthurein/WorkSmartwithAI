@@ -9,7 +9,7 @@ import datetime
 from datetime import timedelta
 from threading import Thread
 from flask import Flask, request, jsonify
-import google.generativeai as genai
+from google import genai  # SDK အသစ်
 from google.oauth2.service_account import Credentials 
 
 app = Flask(__name__)
@@ -24,17 +24,17 @@ SERVICE_ACCOUNT_ENCODED = os.environ.get('SERVICE_ACCOUNT_JSON')
 
 # Admin ဝင်ဖြေရင် Bot ခေတ္တရပ်မည့်ကြာချိန် (စက္ကန့်) - ၃၀၀ စက္ကန့် (၅ မိနစ်)
 PAUSE_DURATION = 300 
-paused_users = {} # ဘယ် User တွေကို ခဏရပ်ထားလဲ မှတ်သားမည့် နေရာ
+paused_users = {} 
 
 if GOOGLE_API_KEY:
-    genai.configure(api_key=GOOGLE_API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # SDK အသစ်၏ Client Setup
+    client_ai = genai.Client(api_key=GOOGLE_API_KEY)
     user_sessions = {} 
 else:
     print("⚠️ CRITICAL: GOOGLE_API_KEY is missing!")
 
 # ==========================================
-# ၂။ GOOGLE SHEETS HANDLER (SERVICE APPEND LOGIC)
+# ၂။ GOOGLE SHEETS HANDLER
 # ==========================================
 def get_google_creds():
     try:
@@ -51,10 +51,6 @@ def get_google_creds():
         return None
 
 def save_to_sheet_async(sender_id, lead_data):
-    """
-    Column Mapping based on CSV:
-    1:ID, 2:Name, 3:Phone, 4:Service, 5:Status, 6:Last Contacted, 7:Follow Up Count, 8:Stop Follow Up
-    """
     try:
         creds = get_google_creds()
         if not creds: return
@@ -63,54 +59,42 @@ def save_to_sheet_async(sender_id, lead_data):
         
         try:
             cell = sheet.find(str(sender_id), in_column=1)
-        except gspread.exceptions.CellNotFound:
+        except:
             cell = None
 
-        # Data Extraction
         name = lead_data.get('name', 'N/A')
         phone = lead_data.get('phone', 'N/A')
-        new_service = lead_data.get('service', 'N/A') # Service အသစ်
+        new_service = lead_data.get('service', 'N/A')
         status = lead_data.get('status', 'N/A')
         stop_followup = lead_data.get('stop_followup', False)
-
         current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # Phone Formatting
         if phone != 'N/A' and phone != '':
             if not str(phone).startswith("'"):
                 phone = f"'{phone}"
 
         if cell:
-            # === Existing User (Update) ===
             row = cell.row
-            
             if name != 'N/A' and name != '': sheet.update_cell(row, 2, name)
             if phone != 'N/A' and phone != '': sheet.update_cell(row, 3, phone)
-
-            # --- [LOGIC UPDATE] Service Append ---
+            
             if new_service != 'N/A' and new_service != '':
-                current_services = sheet.cell(row, 4).value # Column 4 ကိုဖတ်မယ်
-                
+                current_services = sheet.cell(row, 4).value
                 if current_services:
-                    # အရင် Service တွေရှိပြီးသားဆိုရင်၊ အသစ်က ပါပြီးသားလား စစ်မယ်
                     if new_service not in current_services:
-                        # မပါသေးရင် ကော်မာခံပြီး ဆက်ပေါင်းမယ်
                         updated_service = f"{current_services}, {new_service}"
                         sheet.update_cell(row, 4, updated_service)
                 else:
-                    # ဘာမှ မရှိသေးရင် အသစ်ထည့်မယ်
                     sheet.update_cell(row, 4, new_service)
             
             if status != 'N/A': sheet.update_cell(row, 5, status)
-            sheet.update_cell(row, 6, current_time) # Last Contacted
+            sheet.update_cell(row, 6, current_time)
             sheet.update_cell(row, 7, 0) # Reset Follow-up Count
             
             if stop_followup:
                 sheet.update_cell(row, 8, True)
                 sheet.update_cell(row, 5, "Not Interested") 
-
         else:
-            # === New User (Insert) ===
             sheet.append_row([
                 str(sender_id), 
                 name, 
@@ -118,19 +102,17 @@ def save_to_sheet_async(sender_id, lead_data):
                 new_service, 
                 status if status != 'N/A' else "New",
                 current_time,
-                0,     # Count
-                False  # Stop
+                0, 
+                False
             ])
-            
-        print(f"✅ Lead Updated: {sender_id}")
-    except Exception as e:
-        print(f"🔴 Sheet Save Error: {e}")
+    except: pass
 
 # ==========================================
-# ၃။ CORE BOT LOGIC
+# ၃။ CORE BOT LOGIC (With FULL Knowledge Base)
 # ==========================================
 def ask_gemini(sender_id, user_message):
     
+    # Boss ရဲ့ မူရင်း Knowledge Base အပြည့်အစုံ
     knowledge_base = """
     သင်သည် 'Work Smart with AI' ၏ ကျွမ်းကျင်သော Sales Expert (အမျိုးသား) ဖြစ်သည်။ 
     
@@ -160,17 +142,15 @@ def ask_gemini(sender_id, user_message):
     - User ရဲ့ စိတ်ဝင်စားတဲ့ Service တွေကို စာရင်းသွင်းပြီးရင် Google Sheet ထဲမှာ တိုက်စစ်ပြီး User ကို ပြန်ပြပြီး Comfirm ရယူပါ။ 
     """
 
-    if sender_id not in user_sessions:
-        user_sessions[sender_id] = model.start_chat(history=[])
-        user_sessions[sender_id].send_message(knowledge_base)
-
-    chat = user_sessions[sender_id]
-
     try:
-        response_obj = chat.send_message(user_message)
-        full_text = response_obj.text
+        # SDK အသစ် (google-genai) အသုံးပြုပုံ
+        response = client_ai.models.generate_content(
+            model="gemini-1.5-flash",
+            config={'system_instruction': knowledge_base},
+            contents=user_message
+        )
+        full_text = response.text
 
-        # <data> tag Processing
         data_match = re.search(r'<data>(.*?)</data>', full_text, re.DOTALL)
         clean_reply = re.sub(r'<data>.*?</data>', '', full_text, flags=re.DOTALL).strip()
 
@@ -178,21 +158,20 @@ def ask_gemini(sender_id, user_message):
             try:
                 lead_data = json.loads(data_match.group(1))
                 Thread(target=save_to_sheet_async, args=(sender_id, lead_data)).start()
-            except Exception as e:
-                print(f"JSON Parse Error: {e}")
+            except: pass
 
         return clean_reply
         
     except Exception as e:
         print(f"🔴 Gemini Error: {e}")
-        return "ခဏလေးနော်၊ လူကြီးမင်း။ စနစ်က ခဏလေး ကြန့်ကြာနေလို့ပါ။"
+        return "ခဏလေးစောင့်ပေးပါခင်ဗျာ။ System လေး ပြန်စစ်နေလို့ပါ။"
 
 # ==========================================
-# ၄။ WEBHOOK & PAUSE LOGIC
+# ၄။ ROUTES & WEBHOOK
 # ==========================================
 @app.route('/')
 def home():
-    return "Work Smart AI Bot is Running!", 200
+    return "Work Smart AI Bot (New SDK) is Running!", 200
 
 @app.route('/ping')
 def ping():
@@ -212,40 +191,29 @@ def fb_webhook():
                 for entry in body.get("entry", []):
                     for event in entry.get("messaging", []):
                         
-                        # --- [LOGIC 1] ADMIN REPLY DETECTION ---
-                        # "is_echo": True ဆိုရင် Admin ဘက်က ပို့လိုက်တဲ့စာ
+                        # Admin Reply Logic
                         if event.get("message", {}).get("is_echo"):
-                            recipient_id = event["recipient"]["id"] # Customer ID
-                            
-                            # နောက်ထပ် ၅ မိနစ် (PAUSE_DURATION) အထိ Bot ကို Pause မယ်
+                            recipient_id = event["recipient"]["id"]
                             unpause_time = datetime.datetime.now() + timedelta(seconds=PAUSE_DURATION)
                             paused_users[recipient_id] = unpause_time
-                            
-                            print(f"⏸️ Admin replied to {recipient_id}. Bot paused until {unpause_time}")
                             continue 
 
-                        # --- [LOGIC 2] USER MESSAGE HANDLING ---
+                        # User Message Logic
                         if "message" in event and "text" in event["message"]:
                             sid = event["sender"]["id"]
                             msg = event["message"]["text"]
 
-                            # Check Pause Status
                             if sid in paused_users:
                                 if datetime.datetime.now() < paused_users[sid]:
-                                    print(f"💤 Bot is sleeping for {sid} (Admin is talking)")
-                                    continue # Pause မပြည့်သေးရင် ဘာမှမလုပ်ဘူး
+                                    continue 
                                 else:
-                                    # အချိန်ပြည့်သွားရင် List ထဲက ပြန်ဖျက်ပြီး Bot အလုပ်ပြန်လုပ်မယ်
                                     del paused_users[sid]
-                                    print(f"▶️ Bot resumed for {sid}")
 
-                            # Process with Gemini
+                            # AI ကို မေးမယ်
                             reply = ask_gemini(sid, msg)
                             send_facebook_message(sid, reply)
-                            
             return "OK", 200
-        except Exception as e:
-            print(f"Webhook Error: {e}")
+        except:
             return "Error", 500
 
 def send_facebook_message(recipient_id, text):
