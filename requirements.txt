@@ -1,4 +1,4 @@
-google-genai
+google-generativeai
 flask
 requests
 gspread
