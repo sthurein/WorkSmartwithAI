@@ -130,7 +130,8 @@ def process_ai_response(sender_id, user_message):
        - <data>{"name": "...", "phone": "...", "service": "...", "status": "...", "stop_followup": boolean}</data>
        - status values: "New", "Interested", "Not Interested", "Closed"
     3. **International Phone:** နိုင်ငံတကာ ဖုန်းနံပါတ်များကိုလည်း လက်ခံပါ။
-    4. **ဖုန်းနံပါတ်, အမည်, Service တွေ ရပြီးရင် Sale close လုပ်ပါ။​
+    4. **ဖုန်းနံပါတ်, အမည်, Service တွေ ရပြီးရင် Sale close လုပ်ပါ။
+    5. ***အမည်ကို တစ်ခါတောင်းပါ။ ပြီးမှ ဖုန်းနံပါတ်ကို ထပ်တောင်းပါ။ ​
 
     [Product Info - Knowledge Base]
     1. **AI Sales Content Creation:** 150,000 MMK (Early Bird)၊ 2.5.2026 စမည်၊ Sat & Sun (8:00 PM - 9:30 PM)၊ ၆ ပတ်။ 
